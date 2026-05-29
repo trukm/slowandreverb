@@ -12,6 +12,7 @@
 		4525C39A2EACF8FF00667FE0 /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
 		4525C3AB2EACF9EC00667FE0 /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
 		457269182F381B5F009D9222 /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
+		457A546F2FAF772200BB409E /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
 		4593BD0C2F1F9B560029D21C /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
 		45E896C02F04E9EB0036CB34 /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
 		45E897102F0D3B590036CB34 /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
@@ -71,6 +72,11 @@
 			sourceTree = "<group>";
 		};
 		4572691B2F381B5F009D9222 /* Products */ = {
+			isa = PBXGroup;
+			name = Products;
+			sourceTree = "<group>";
+		};
+		457A54722FAF772200BB409E /* Products */ = {
 			isa = PBXGroup;
 			name = Products;
 			sourceTree = "<group>";
@@ -160,10 +166,6 @@
 			projectDirPath = "";
 			projectReferences = (
 				{
-					ProductGroup = 45E897132F0D3B590036CB34 /* Products */;
-					ProjectRef = 45E897102F0D3B590036CB34 /* slowedandreverb.xcodeproj */;
-				},
-				{
 					ProductGroup = 4572691B2F381B5F009D9222 /* Products */;
 					ProjectRef = 457269182F381B5F009D9222 /* slowedandreverb.xcodeproj */;
 				},
@@ -176,6 +178,10 @@
 					ProjectRef = 451F836A2EAA676B00F72198 /* slowedandreverb.xcodeproj */;
 				},
 				{
+					ProductGroup = 457A54722FAF772200BB409E /* Products */;
+					ProjectRef = 457A546F2FAF772200BB409E /* slowedandreverb.xcodeproj */;
+				},
+				{
 					ProductGroup = 4593BD0F2F1F9B560029D21C /* Products */;
 					ProjectRef = 4593BD0C2F1F9B560029D21C /* slowedandreverb.xcodeproj */;
 				},
@@ -184,12 +190,16 @@
 					ProjectRef = 4525C39A2EACF8FF00667FE0 /* slowedandreverb.xcodeproj */;
 				},
 				{
-					ProductGroup = 4525C3AE2EACF9EC00667FE0 /* Products */;
-					ProjectRef = 4525C3AB2EACF9EC00667FE0 /* slowedandreverb.xcodeproj */;
-				},
-				{
 					ProductGroup = 45E896C32F04E9EB0036CB34 /* Products */;
 					ProjectRef = 45E896C02F04E9EB0036CB34 /* slowedandreverb.xcodeproj */;
+				},
+				{
+					ProductGroup = 45E897132F0D3B590036CB34 /* Products */;
+					ProjectRef = 45E897102F0D3B590036CB34 /* slowedandreverb.xcodeproj */;
+				},
+				{
+					ProductGroup = 4525C3AE2EACF9EC00667FE0 /* Products */;
+					ProjectRef = 4525C3AB2EACF9EC00667FE0 /* slowedandreverb.xcodeproj */;
 				},
 			);
 			projectRoot = "";
