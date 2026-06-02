@@ -1391,7 +1391,6 @@ protocol SettingsViewControllerDelegate: AnyObject {
     func settingsViewController(_ controller: SettingsViewController, didChangeStepperState isEnabled: Bool)
     func settingsViewController(_ controller: SettingsViewController, didChangeAutoLoadAddedSongState isEnabled: Bool)
     func settingsViewController(_ controller: SettingsViewController, didChangeShowPresetsState isEnabled: Bool)
-    func settingsViewController(_ controller: SettingsViewController, didChangeRemoveVocalsState isEnabled: Bool, completion: @escaping (Bool) -> Void)
 }
 
 
@@ -1418,7 +1417,6 @@ class SettingsViewController: UIViewController {
     var isAutoLoadAddedSongEnabled: Bool = false
     var isShowPresetsEnabled: Bool = false
     var isRememberSearchEnabled: Bool = false
-    var isRemoveVocalsEnabled: Bool = false
     private let impactFeedbackGenerator = UIImpactFeedbackGenerator(style: .light)
     
     private let scrollView = UIScrollView()
@@ -1482,10 +1480,6 @@ class SettingsViewController: UIViewController {
     private let showPresetsSwitch = UISwitch()
     private let showPresetsLabel = UILabel()
     
-    private let removeVocalsSwitch = UISwitch()
-    private let removeVocalsLabel = UILabel()
-    private var removeVocalsGroup: UIStackView!
-    
     private let scanDuplicatesButton = UIButton(type: .system)
     private let scanDuplicatesLabel = UILabel()
     
@@ -1520,7 +1514,6 @@ class SettingsViewController: UIViewController {
         // Apply loaded state to UI
         showPresetsSwitch.isOn = isShowPresetsEnabled
         rememberSearchSwitch.isOn = isRememberSearchEnabled
-        removeVocalsSwitch.isOn = isRemoveVocalsEnabled
         
         updateAccurateSpeedToggleState()
     }
@@ -1773,17 +1766,6 @@ class SettingsViewController: UIViewController {
         showPresetsGroup.axis = .vertical
         showPresetsGroup.spacing = 4
         
-        // --- Remove Vocals Setting ---
-        removeVocalsLabel.text = "Remove Vocals"
-        removeVocalsSwitch.isOn = isRemoveVocalsEnabled
-        removeVocalsSwitch.addTarget(self, action: #selector(removeVocalsSwitchChanged), for: .valueChanged)
-        let removeVocalsStack = UIStackView(arrangedSubviews: [removeVocalsLabel, removeVocalsSwitch])
-        removeVocalsStack.spacing = 20
-        let removeVocalsDescription = createDescriptionLabel(with: "Toggle between full song (vocals) and instrumental-only version.")
-        removeVocalsGroup = UIStackView(arrangedSubviews: [removeVocalsStack, removeVocalsDescription])
-        removeVocalsGroup.axis = .vertical
-        removeVocalsGroup.spacing = 4
-        
         // --- Scan Duplicates Setting ---
         scanDuplicatesLabel.text = "Scan for Duplicates"
         
@@ -1993,7 +1975,6 @@ class SettingsViewController: UIViewController {
             // Accuracy
             accuratePitchGroup,
             preciseSpeedGroup,
-            removeVocalsGroup,
             
             // Folders
             interfaceFolder,
@@ -2156,34 +2137,6 @@ class SettingsViewController: UIViewController {
         delegate?.settingsViewController(self, didChangeShowPresetsState: sender.isOn)
         UserDefaults.standard.set(sender.isOn, forKey: "isShowPresetsEnabled")
         impactFeedbackGenerator.impactOccurred()
-    }
-    
-    @objc private func removeVocalsSwitchChanged(_ sender: UISwitch) {
-        let isEnabled = sender.isOn
-        if isEnabled {
-            let alert = UIAlertController(title: "Process Audio?", message: "This will take a moment to process. Do you want to continue?", preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel, handler: { _ in
-                sender.setOn(false, animated: true)
-            }))
-            alert.addAction(UIAlertAction(title: "Continue", style: .default, handler: { [weak self] _ in
-                guard let self = self else { return }
-                sender.isEnabled = false
-                self.delegate?.settingsViewController(self, didChangeRemoveVocalsState: true) { success in
-                    sender.isEnabled = true
-                    if !success {
-                        sender.setOn(false, animated: true)
-                    }
-                }
-                self.impactFeedbackGenerator.impactOccurred()
-            }))
-            present(alert, animated: true)
-        } else {
-            sender.isEnabled = false
-            delegate?.settingsViewController(self, didChangeRemoveVocalsState: false) { [weak self] _ in
-                sender.isEnabled = true
-                self?.impactFeedbackGenerator.impactOccurred()
-            }
-        }
     }
     
     @objc private func slowedReverbSpeedChanged(_ sender: UISegmentedControl) {
@@ -3714,6 +3667,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
     private let artistNameLabel = UILabel()
     private let playPauseButton = UIButton(type: .system)
     private let libraryButton = UIButton(type: .system)
+    private let removeVocalsButton = UIButton(type: .system)
     private let saveValuesButton = UIButton(type: .system)
     private let favoriteButton = UIButton(type: .system)
     private let repeatButton = UIButton(type: .system)
@@ -4196,6 +4150,18 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         saveValuesButton.titleLabel?.minimumScaleFactor = 0.5
         saveValuesButton.addTarget(self, action: #selector(saveValuesTapped), for: .touchUpInside)
         
+        // Remove Vocals Button
+        var removeVocalsConfig = UIButton.Configuration.filled()
+        removeVocalsConfig.title = "Remove Vocals"
+        removeVocalsConfig.baseBackgroundColor = .secondarySystemFill
+        removeVocalsConfig.baseForegroundColor = .label
+        removeVocalsConfig.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 10, bottom: 12, trailing: 10)
+        removeVocalsConfig.titleLineBreakMode = .byTruncatingTail
+        removeVocalsButton.configuration = removeVocalsConfig
+        removeVocalsButton.titleLabel?.adjustsFontSizeToFitWidth = true
+        removeVocalsButton.titleLabel?.minimumScaleFactor = 0.5
+        removeVocalsButton.addTarget(self, action: #selector(removeVocalsTapped), for: .touchUpInside)
+        
         // Favorite Button
         var favConfig = UIButton.Configuration.filled()
         favConfig.title = "Favorite"
@@ -4255,7 +4221,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         view.addSubview(settingsIconButton)
         
         var resetButtonConfig = UIButton.Configuration.filled()
-        resetButtonConfig.title = "Reset"
+        resetButtonConfig.title = "Reset Values"
         resetButtonConfig.baseBackgroundColor = .secondarySystemFill
         resetButtonConfig.baseForegroundColor = .label
         resetButtonConfig.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 10, bottom: 12, trailing: 10)
@@ -4307,11 +4273,15 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         presetsStack.distribution = .fillEqually
         presetsStack.isHidden = !isShowPresetsEnabled
 
-        // Horizontal stack for Reset and Export buttons
-        let actionButtonsStack = UIStackView(arrangedSubviews: [resetButton, exportButton])
-        actionButtonsStack.axis = .horizontal
-        actionButtonsStack.spacing = 20
-        actionButtonsStack.distribution = .fillEqually
+        let saveAndResetStack = UIStackView(arrangedSubviews: [saveValuesButton, resetButton])
+        saveAndResetStack.axis = .horizontal
+        saveAndResetStack.spacing = 20
+        saveAndResetStack.distribution = .fillEqually
+        
+        let bottomActionsStack = UIStackView(arrangedSubviews: [saveAndResetStack, removeVocalsButton, exportButton])
+        bottomActionsStack.axis = .vertical
+        bottomActionsStack.spacing = 50
+        bottomActionsStack.distribution = .fill
 
         // 7. Stack View for Layout
         let stackView = UIStackView(arrangedSubviews: [
@@ -4328,8 +4298,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
             UIView(), // Spacer
             presetsStack,
             extraActionsStack,
-            saveValuesButton,
-            actionButtonsStack,
+            bottomActionsStack
         ])
         
         stackView.axis = .vertical
@@ -4342,10 +4311,8 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         stackView.setCustomSpacing(12, after: bassControlStack)
         stackView.setCustomSpacing(12, after: midsControlStack)
         stackView.setCustomSpacing(20, after: trebleControlStack)
-        stackView.setCustomSpacing(10, after: extraActionsStack)
-        stackView.setCustomSpacing(40, after: extraActionsStack)
-        stackView.setCustomSpacing(10, after: saveValuesButton)
         stackView.setCustomSpacing(50, after: presetsStack)
+        stackView.setCustomSpacing(50, after: extraActionsStack)
         
         // The spacer view should have a low-priority constraint to allow it to shrink
         if let spacer = stackView.arrangedSubviews[7] as? UIView {
@@ -4417,8 +4384,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
             
             // Make sliders and button take up more width
             progressStack.widthAnchor.constraint(equalTo: stackView.widthAnchor),
-            actionButtonsStack.widthAnchor.constraint(equalTo: stackView.widthAnchor),
-            saveValuesButton.widthAnchor.constraint(equalTo: stackView.widthAnchor),
+            bottomActionsStack.widthAnchor.constraint(equalTo: stackView.widthAnchor),
             extraActionsStack.widthAnchor.constraint(equalTo: stackView.widthAnchor),
             presetsStack.widthAnchor.constraint(equalTo: stackView.widthAnchor)
         ])
@@ -4487,6 +4453,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         previousTrackButton.isHidden = isHidden
         nextTrackButton.isHidden = isHidden
         resetButton.isHidden = isHidden
+        removeVocalsButton.isHidden = isHidden
         saveValuesButton.isHidden = isHidden
         favoriteButton.isHidden = isHidden
         repeatButton.isHidden = isHidden
@@ -4654,7 +4621,6 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         let isAlbumArtVisible = UserDefaults.standard.bool(forKey: "isAlbumArtVisible", defaultValue: true)
         let isLoopingEnabled = UserDefaults.standard.bool(forKey: "isLoopingEnabled")
         let isRememberSettingsEnabled = UserDefaults.standard.bool(forKey: "isRememberSettingsEnabled")
-        let isAutoPlayNextEnabled = UserDefaults.standard.bool(forKey: "isAutoPlayNextEnabled")
         let isStepperEnabled = UserDefaults.standard.bool(forKey: "isStepperEnabled")
         
         settingsViewController(SettingsViewController(), didChangeReverbSliderState: isReverbSliderEnabled)
@@ -5121,7 +5087,6 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         settingsVC.isAutoPlayNextEnabled = self.isAutoPlayNextEnabled
         settingsVC.isStepperEnabled = self.isStepperEnabled
         settingsVC.isAutoLoadAddedSongEnabled = UserDefaults.standard.bool(forKey: "isAutoLoadAddedSongEnabled")
-        settingsVC.isRemoveVocalsEnabled = audioProcessor.isVocalRemovalEnabled()
         
         // Embed the SettingsViewController in a UINavigationController to display a navigation bar
         let navController = UINavigationController(rootViewController: settingsVC)
@@ -5245,26 +5210,52 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         presetsStack.isHidden = !isEnabled
     }
     
-    func settingsViewController(_ controller: SettingsViewController, didChangeRemoveVocalsState isEnabled: Bool, completion: @escaping (Bool) -> Void) {
+    @objc private func removeVocalsTapped() {
+        let currentlyEnabled = audioProcessor.isVocalRemovalEnabled()
+        if !currentlyEnabled {
+            let alert = UIAlertController(title: "Process Audio?", message: "This will take a moment to process. Do you want to continue?", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel, handler: nil))
+            alert.addAction(UIAlertAction(title: "Continue", style: .default, handler: { [weak self] _ in
+                self?.processVocalRemoval(enable: true)
+            }))
+            present(alert, animated: true)
+        } else {
+            processVocalRemoval(enable: false)
+        }
+    }
+    
+    private func processVocalRemoval(enable: Bool) {
         audioProcessor.setVocalLevel(0.0)
+        removeVocalsButton.isEnabled = false
         
-        if isEnabled {
-            let overlay = createLoadingHUD(in: controller.view, message: "Removing Vocals...")
-            controller.view.isUserInteractionEnabled = false
-            audioProcessor.setRemoveVocalsEnabled(true) { success in
+        if enable {
+            let overlay = createLoadingHUD(in: self.view, message: "Removing Vocals...")
+            self.view.isUserInteractionEnabled = false
+            
+            audioProcessor.setRemoveVocalsEnabled(true) { [weak self] success in
                 DispatchQueue.main.async {
                     overlay.removeFromSuperview()
-                    controller.view.isUserInteractionEnabled = true
-                    completion(success)
+                    self?.view.isUserInteractionEnabled = true
+                    self?.removeVocalsButton.isEnabled = true
+                    self?.updateRemoveVocalsButtonState()
+                    if success { self?.impactFeedbackGenerator.impactOccurred() }
                 }
             }
         } else {
-            audioProcessor.setRemoveVocalsEnabled(false) { success in
+            audioProcessor.setRemoveVocalsEnabled(false) { [weak self] success in
                 DispatchQueue.main.async {
-                    completion(success)
+                    self?.removeVocalsButton.isEnabled = true
+                    self?.updateRemoveVocalsButtonState()
+                    if success { self?.impactFeedbackGenerator.impactOccurred() }
                 }
             }
         }
+    }
+    
+    private func updateRemoveVocalsButtonState() {
+        let isEnabled = audioProcessor.isVocalRemovalEnabled()
+        removeVocalsButton.configuration?.baseBackgroundColor = isEnabled ? .systemBlue : .secondarySystemFill
+        removeVocalsButton.configuration?.baseForegroundColor = isEnabled ? .white : .label
     }
     
     private func createLoadingHUD(in parentView: UIView, message: String) -> UIView {
@@ -5671,6 +5662,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
             resetControlsState(isHidden: false)
             resetButton.isHidden = false
             saveValuesButton.isHidden = false
+            updateRemoveVocalsButtonState()
             updateFavoriteButtonState()
             updateRepeatButtonState()
             exportButton.isHidden = !UserDefaults.standard.bool(forKey: "isExportButtonEnabled", defaultValue: true)
