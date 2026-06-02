@@ -193,10 +193,17 @@ class SourceSeparationProcessor {
         return false
     }
     
-    /// Mid-side stereo processing for vocal removal:
-    /// Vocals are typically center-panned (mono), instruments are spread (stereo)
-    /// - Vocals (Mid) = (L + R) / 2
-    /// - Instrumental (Sides) = (L - R) / 2
+    /// Multi-band similarity processing for vocal removal:
+    /// This upgraded algorithmic technique separates audio into three frequency bands (Low, Mid, High)
+    /// and uses dynamic spatial similarity to extract vocals from the Mid band.
+    /// 
+    /// 1. Lows (<150Hz) and Highs (>4000Hz) bypass the extraction to preserve bass, kicks, and cymbals.
+    /// 2. Mids are analyzed sample-by-sample for Left/Right similarity.
+    /// 3. Signals with high similarity (center or slightly panned) are extracted as vocals.
+    /// 4. Hard-panned or out-of-phase signals (wide synths, guitars) are left in the instrumental track.
+    ///
+    /// **Limitations**: While significantly better than simple phase cancellation and handles slightly
+    /// panned vocals better, true isolation of wildly panned vocals still requires a Machine Learning model.
     private func simplifiedSeparation(
         inputChannels: UnsafePointer<UnsafeMutablePointer<Float>>,
         vocalChannels: UnsafePointer<UnsafeMutablePointer<Float>>,
@@ -228,21 +235,52 @@ class SourceSeparationProcessor {
         let instLeft = instrumentalChannels[0]
         let instRight = instrumentalChannels[1]
         
+        // Simple RC Filter coefficients for 44.1kHz to isolate frequency bands
+        let alphaLow: Float = 0.02   // ~150 Hz
+        let alphaHigh: Float = 0.36  // ~4000 Hz
+        
+        var lowPass1L: Float = 0, lowPass1R: Float = 0
+        var lowPass2L: Float = 0, lowPass2R: Float = 0
+        
         // Process each frame
         for frame in 0..<frameCount {
             let left = leftChannel[frame]
             let right = rightChannel[frame]
             
-            // Mid-Side conversion
-            let mid = (left + right) * 0.5
-            let side = (left - right) * 0.5
+            // 1. Extract Low frequencies (Bass, Kick drum)
+            lowPass1L += alphaLow * (left - lowPass1L)
+            lowPass1R += alphaLow * (right - lowPass1R)
+            let lowL = lowPass1L
+            let lowR = lowPass1R
             
-            // Output mono-compatible in-phase signals to prevent cancellation on device speakers
-            vocalLeft[frame] = mid
-            vocalRight[frame] = mid
+            // 2. Extract High frequencies (Cymbals, "Air")
+            lowPass2L += alphaHigh * (left - lowPass2L)
+            lowPass2R += alphaHigh * (right - lowPass2R)
+            let highL = left - lowPass2L
+            let highR = right - lowPass2R
             
-            instLeft[frame] = side
-            instRight[frame] = side
+            // 3. Extract Mid frequencies (Vocals, Guitars)
+            let midL = left - lowL - highL
+            let midR = right - lowR - highR
+            
+            // 4. Similarity-based Vocal Extraction in the Mid band
+            let mid = (midL + midR) * 0.5
+            let maxAmp = max(abs(midL), abs(midR))
+            
+            // Similarity is 1.0 for perfect center, 0.0 for hard-panned
+            let similarity = maxAmp > 0 ? max(0, 1.0 - abs(midL - midR) / maxAmp) : 0
+            let vocalMid = mid * similarity
+            
+            let instMidL = midL - vocalMid
+            let instMidR = midR - vocalMid
+            
+            // Vocal stem gets the extracted vocal
+            vocalLeft[frame] = vocalMid
+            vocalRight[frame] = vocalMid
+            
+            // Instrumental gets the original Lows, Highs, and the leftover Mids
+            instLeft[frame] = lowL + highL + instMidL
+            instRight[frame] = lowR + highR + instMidR
         }
         
         return true

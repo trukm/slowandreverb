@@ -4152,7 +4152,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         
         // Remove Vocals Button
         var removeVocalsConfig = UIButton.Configuration.filled()
-        removeVocalsConfig.title = "Remove Vocals"
+        removeVocalsConfig.title = "Reduce Vocals"
         removeVocalsConfig.baseBackgroundColor = .secondarySystemFill
         removeVocalsConfig.baseForegroundColor = .label
         removeVocalsConfig.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 10, bottom: 12, trailing: 10)
@@ -5229,7 +5229,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         removeVocalsButton.isEnabled = false
         
         if enable {
-            let overlay = createLoadingHUD(in: self.view, message: "Removing Vocals...")
+            let overlay = createLoadingHUD(in: self.view, message: "Reducing Vocals...")
             self.view.isUserInteractionEnabled = false
             
             audioProcessor.setRemoveVocalsEnabled(true) { [weak self] success in
