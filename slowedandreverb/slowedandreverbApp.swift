@@ -1342,7 +1342,7 @@ class SettingsViewController: UIViewController {
         impactFeedbackGenerator.prepare()
         navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .close, target: self, action: #selector(dismissSettings))
         // Load show presets state
-        isShowPresetsEnabled = UserDefaults.standard.bool(forKey: "isShowPresetsEnabled")
+        isShowPresetsEnabled = UserDefaults.standard.bool(forKey: "isShowPresetsEnabled", defaultValue: true)
         showPresetsSwitch.isOn = isShowPresetsEnabled
         isRememberSearchEnabled = UserDefaults.standard.bool(forKey: "isRememberSearchEnabled")
         rememberSearchSwitch.isOn = isRememberSearchEnabled
@@ -1361,7 +1361,7 @@ class SettingsViewController: UIViewController {
             scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor)
+            scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
         // Helper to create description labels
@@ -3574,7 +3574,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
     private var isRememberSettingsEnabled = false
     private var isAutoPlayNextEnabled = false
     private var isStepperEnabled = false
-    private var isShowPresetsEnabled = false
+    private var isShowPresetsEnabled = true
     
     // Library state
     private var currentSong: Song?
@@ -3620,7 +3620,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         self.isRememberSettingsEnabled = UserDefaults.standard.bool(forKey: "isRememberSettingsEnabled")
         self.isAutoPlayNextEnabled = UserDefaults.standard.bool(forKey: "isAutoPlayNextEnabled")
         self.isStepperEnabled = UserDefaults.standard.bool(forKey: "isStepperEnabled")
-        self.isShowPresetsEnabled = UserDefaults.standard.bool(forKey: "isShowPresetsEnabled")
+        self.isShowPresetsEnabled = UserDefaults.standard.bool(forKey: "isShowPresetsEnabled", defaultValue: true)
         
         super.viewDidLoad()
         overrideUserInterfaceStyle = .dark // Lock the app in dark mode
@@ -4129,7 +4129,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         stackView.setCustomSpacing(10, after: extraActionsStack)
         stackView.setCustomSpacing(40, after: extraActionsStack)
         stackView.setCustomSpacing(10, after: saveValuesButton)
-        stackView.setCustomSpacing(40, after: presetsStack)
+        stackView.setCustomSpacing(50, after: presetsStack)
         
         // The spacer view should have a low-priority constraint to allow it to shrink
         if let spacer = stackView.arrangedSubviews[7] as? UIView {
@@ -4183,7 +4183,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
             scrollView.topAnchor.constraint(equalTo: libraryButton.bottomAnchor, constant: 10),
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             
             // StackView constraints inside ScrollView
             stackView.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 10),
@@ -4637,7 +4637,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         }
         
         if let sheet = navController.sheetPresentationController {
-            sheet.detents = [.large(), .medium()]
+            sheet.detents = [.large()]
             sheet.prefersGrabberVisible = true
             sheet.selectedDetentIdentifier = .large
         }
@@ -4749,34 +4749,42 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         var hasAction = false
         
         if let artist = song.artist, !artist.isEmpty {
-            alert.addAction(UIAlertAction(title: "Search Artist", style: .default) { [weak self] _ in
+            let action = UIAlertAction(title: "Search Artist", style: .default) { [weak self] _ in
                 self?.presentLibrary(withSearch: artist, exactField: "artist")
-            })
+            }
+            action.setValue(UIImage(systemName: "person.fill"), forKey: "image")
+            alert.addAction(action)
             hasAction = true
         }
         
         if let album = song.album, !album.isEmpty {
-            alert.addAction(UIAlertAction(title: "Search Album", style: .default) { [weak self] _ in
+            let action = UIAlertAction(title: "Search Album", style: .default) { [weak self] _ in
                 self?.presentLibrary(withSearch: album, exactField: "album")
-            })
+            }
+            action.setValue(UIImage(systemName: "opticaldisc"), forKey: "image")
+            alert.addAction(action)
             hasAction = true
         }
         
         if let artist = song.artist, !artist.isEmpty {
-            alert.addAction(UIAlertAction(title: "Shuffle Artist", style: .default) { [weak self] _ in
+            let action = UIAlertAction(title: "Shuffle Artist", style: .default) { [weak self] _ in
                 guard let self = self else { return }
                 let artistSongs = LibraryManager.shared.songs.filter { ($0.artist ?? "").localizedCaseInsensitiveCompare(artist) == .orderedSame }
                 self.playShuffled(songs: artistSongs)
-            })
+            }
+            action.setValue(UIImage(systemName: "shuffle"), forKey: "image")
+            alert.addAction(action)
             hasAction = true
         }
         
         if let album = song.album, !album.isEmpty {
-            alert.addAction(UIAlertAction(title: "Shuffle Album", style: .default) { [weak self] _ in
+            let action = UIAlertAction(title: "Shuffle Album", style: .default) { [weak self] _ in
                 guard let self = self else { return }
                 let albumSongs = LibraryManager.shared.songs.filter { ($0.album ?? "").localizedCaseInsensitiveCompare(album) == .orderedSame }
                 self.playShuffled(songs: albumSongs)
-            })
+            }
+            action.setValue(UIImage(systemName: "shuffle"), forKey: "image")
+            alert.addAction(action)
             hasAction = true
         }
         
@@ -5855,6 +5863,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             "isAutoPlayNextEnabled": false,
             "isStepperEnabled": false,
             "isAutoLoadAddedSongEnabled": false,
+            "isShowPresetsEnabled": true,
             "slowedReverbSpeedPreset": 0.8,
             "slowedReverbReverbPreset": 40.0,
             "spedUpSpeedPreset": 1.2
