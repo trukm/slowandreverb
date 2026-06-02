@@ -29,6 +29,7 @@ class AudioProcessor {
     private var isExporting = false // Flag to prevent concurrent exports
     
     private var audioFile: AVAudioFile?
+    private var originalAudioFile: AVAudioFile?
     private var currentTitle: String?
     private var currentArtist: String?
     private var currentArtwork: UIImage?
@@ -42,6 +43,11 @@ class AudioProcessor {
     
     // Property to hold the static Now Playing info
     private var nowPlayingInfo: [String: Any]?
+    
+    // Source Separation Properties
+    private let sourceSeparationProcessor = SourceSeparationProcessor()
+    private var isRemoveVocalsEnabled = false
+    private var currentVocalLevel: Float = 100.0 // 0-100, where 100 = full vocals, 0 = instrumental
     
     // Closure to notify the UI of external playback changes (e.g., from remote commands)
     var onPlaybackStateChanged: (() -> Void)?
@@ -144,6 +150,7 @@ class AudioProcessor {
         
         do {
             self.audioFile = try AVAudioFile(forReading: url)
+            self.originalAudioFile = self.audioFile
             guard let file = self.audioFile else { return nil }
             
             self.audioFileLength = file.length
@@ -209,6 +216,8 @@ class AudioProcessor {
             DispatchQueue.main.async { [weak self] in
                 self?.syncNowPlayingInfo()
             }
+            
+            self.isRemoveVocalsEnabled = false
             
             return (title: title, artist: artistName, artwork: artworkImage)
             
@@ -339,6 +348,161 @@ class AudioProcessor {
     private func getCurrentFramePosition() -> AVAudioFramePosition? {
         guard let nodeTime = playerNode.lastRenderTime, let playerTime = playerNode.playerTime(forNodeTime: nodeTime) else { return nil }
         return lastPlaybackPosition + playerTime.sampleTime
+    }
+    
+    // MARK: Vocal Removal Control
+    
+    /// Enables or disables vocal removal processing.
+    func setRemoveVocalsEnabled(_ enabled: Bool, completion: ((Bool) -> Void)? = nil) {
+        let wasEnabled = isRemoveVocalsEnabled
+        isRemoveVocalsEnabled = enabled
+        
+        if enabled && !wasEnabled && audioFile != nil {
+            // Trigger source separation for current audio file
+            performSourceSeparation { success in
+                if !success { self.isRemoveVocalsEnabled = false }
+                completion?(success)
+            }
+        } else if !enabled && wasEnabled && audioFile != nil {
+            // Revert to original audio file playback
+            if let original = self.originalAudioFile {
+                self.audioFile = original
+            }
+            
+            let wasPlaying = playerNode.isPlaying
+            playerNode.stop()
+            needsReschedule = false
+            lastPlaybackPosition = 0
+            pausedPosition = nil
+            playerNode.scheduleFile(audioFile!, at: nil) { [weak self] in
+                self?.needsReschedule = true
+            }
+            if wasPlaying {
+                if !engine.isRunning { try? engine.start() }
+                playerNode.play()
+            }
+            completion?(true)
+        } else {
+            completion?(true)
+        }
+    }
+    
+    /// Sets the vocal level (0 = instrumental only, 100 = full vocals).
+    func setVocalLevel(_ level: Float) {
+        currentVocalLevel = max(0, min(100, level))
+        UserDefaults.standard.set(currentVocalLevel, forKey: "vocalLevel")
+        
+        // Apply the new vocal level immediately if vocal removal is enabled and audio is loaded
+        if isRemoveVocalsEnabled && audioFile != nil {
+            applyVocalLevel()
+        }
+    }
+    
+    /// Applies the current vocal level to playback by using the mixed buffer.
+    private func applyVocalLevel() {
+        guard isRemoveVocalsEnabled && audioFile != nil else {
+            print("⚠️ applyVocalLevel skipped: isRemoveVocalsEnabled=\(isRemoveVocalsEnabled), hasAudioFile=\(audioFile != nil)")
+            return
+        }
+        
+        // Get the mixed buffer with current vocal level
+        let normalizedLevel = currentVocalLevel / 100.0  // Convert 0-100 to 0-1
+        guard let mixedBuffer = sourceSeparationProcessor.getMixedBuffer(vocalLevel: normalizedLevel, format: audioFile?.processingFormat) else {
+            print("❌ Failed to get mixed buffer for vocal level: \(currentVocalLevel)")
+            return
+        }
+        
+        print("✓ Applying vocal level \(currentVocalLevel)%: mixedBuffer=\(mixedBuffer.frameLength) frames")
+        
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("vocals_removed_temp.caf")
+        
+        do {
+            if FileManager.default.fileExists(atPath: tempURL.path) {
+                try FileManager.default.removeItem(at: tempURL)
+            }
+            
+            let tempFile = try AVAudioFile(forWriting: tempURL, settings: mixedBuffer.format.settings)
+            try tempFile.write(from: mixedBuffer)
+            
+            if self.originalAudioFile == nil {
+                self.originalAudioFile = self.audioFile
+            }
+            self.audioFile = try AVAudioFile(forReading: tempURL)
+            
+            // Stop current playback
+            let wasPlaying = playerNode.isPlaying
+            playerNode.stop()
+            
+            needsReschedule = false
+            lastPlaybackPosition = 0
+            pausedPosition = nil
+            
+            playerNode.scheduleFile(self.audioFile!, at: nil) { [weak self] in
+                self?.needsReschedule = true
+            }
+            
+            // Resume playback if it was playing
+            if wasPlaying {
+                if !engine.isRunning {
+                    try? engine.start()
+                }
+                playerNode.play()
+            }
+        } catch {
+            print("❌ Failed to save separated audio to temp file: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Performs source separation on the current audio file.
+    private func performSourceSeparation(completion: @escaping (Bool) -> Void) {
+        guard let audioFile = audioFile else {
+            completion(false)
+            return
+        }
+        
+        print("🎵 Starting source separation...")
+        
+        // Read audio file into a buffer for processing
+        do {
+            let buffer = AVAudioPCMBuffer(pcmFormat: audioFile.processingFormat, frameCapacity: AVAudioFrameCount(audioFile.length))
+            guard let buffer = buffer else {
+                print("Failed to create buffer for source separation")
+                completion(false)
+                return
+            }
+            
+            try audioFile.read(into: buffer)
+            print("✓ Audio buffer read: \(buffer.frameLength) frames, \(audioFile.processingFormat.channelCount) channels")
+            
+            sourceSeparationProcessor.separateAudio(audioBuffer: buffer) { [weak self] success in
+                if success {
+                    print("✓ Source separation completed successfully")
+                    // Apply vocal level to playback after separation
+                    DispatchQueue.main.async {
+                        self?.applyVocalLevel()
+                        completion(true)
+                    }
+                } else {
+                    print("✗ Source separation failed")
+                    DispatchQueue.main.async {
+                        completion(false)
+                    }
+                }
+            }
+        } catch {
+            print("Error reading audio file for separation: \(error.localizedDescription)")
+            completion(false)
+        }
+    }
+    
+    /// Returns whether vocal removal is currently enabled.
+    func isVocalRemovalEnabled() -> Bool {
+        return isRemoveVocalsEnabled
+    }
+    
+    /// Returns the current vocal level (0-100).
+    func getVocalLevel() -> Float {
+        return currentVocalLevel
     }
     
     // MARK: Now Playing Info & Remote Commands
@@ -1227,6 +1391,7 @@ protocol SettingsViewControllerDelegate: AnyObject {
     func settingsViewController(_ controller: SettingsViewController, didChangeStepperState isEnabled: Bool)
     func settingsViewController(_ controller: SettingsViewController, didChangeAutoLoadAddedSongState isEnabled: Bool)
     func settingsViewController(_ controller: SettingsViewController, didChangeShowPresetsState isEnabled: Bool)
+    func settingsViewController(_ controller: SettingsViewController, didChangeRemoveVocalsState isEnabled: Bool, completion: @escaping (Bool) -> Void)
 }
 
 
@@ -1253,6 +1418,7 @@ class SettingsViewController: UIViewController {
     var isAutoLoadAddedSongEnabled: Bool = false
     var isShowPresetsEnabled: Bool = false
     var isRememberSearchEnabled: Bool = false
+    var isRemoveVocalsEnabled: Bool = false
     private let impactFeedbackGenerator = UIImpactFeedbackGenerator(style: .light)
     
     private let scrollView = UIScrollView()
@@ -1316,6 +1482,10 @@ class SettingsViewController: UIViewController {
     private let showPresetsSwitch = UISwitch()
     private let showPresetsLabel = UILabel()
     
+    private let removeVocalsSwitch = UISwitch()
+    private let removeVocalsLabel = UILabel()
+    private var removeVocalsGroup: UIStackView!
+    
     private let scanDuplicatesButton = UIButton(type: .system)
     private let scanDuplicatesLabel = UILabel()
     
@@ -1337,15 +1507,21 @@ class SettingsViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        
+        // Load state BEFORE setupUI
+        isShowPresetsEnabled = UserDefaults.standard.bool(forKey: "isShowPresetsEnabled", defaultValue: true)
+        isRememberSearchEnabled = UserDefaults.standard.bool(forKey: "isRememberSearchEnabled")
+        
         setupUI()
         title = "Settings"
         impactFeedbackGenerator.prepare()
         navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .close, target: self, action: #selector(dismissSettings))
-        // Load show presets state
-        isShowPresetsEnabled = UserDefaults.standard.bool(forKey: "isShowPresetsEnabled", defaultValue: true)
+        
+        // Apply loaded state to UI
         showPresetsSwitch.isOn = isShowPresetsEnabled
-        isRememberSearchEnabled = UserDefaults.standard.bool(forKey: "isRememberSearchEnabled")
         rememberSearchSwitch.isOn = isRememberSearchEnabled
+        removeVocalsSwitch.isOn = isRemoveVocalsEnabled
+        
         updateAccurateSpeedToggleState()
     }
 
@@ -1597,6 +1773,17 @@ class SettingsViewController: UIViewController {
         showPresetsGroup.axis = .vertical
         showPresetsGroup.spacing = 4
         
+        // --- Remove Vocals Setting ---
+        removeVocalsLabel.text = "Remove Vocals"
+        removeVocalsSwitch.isOn = isRemoveVocalsEnabled
+        removeVocalsSwitch.addTarget(self, action: #selector(removeVocalsSwitchChanged), for: .valueChanged)
+        let removeVocalsStack = UIStackView(arrangedSubviews: [removeVocalsLabel, removeVocalsSwitch])
+        removeVocalsStack.spacing = 20
+        let removeVocalsDescription = createDescriptionLabel(with: "Toggle between full song (vocals) and instrumental-only version.")
+        removeVocalsGroup = UIStackView(arrangedSubviews: [removeVocalsStack, removeVocalsDescription])
+        removeVocalsGroup.axis = .vertical
+        removeVocalsGroup.spacing = 4
+        
         // --- Scan Duplicates Setting ---
         scanDuplicatesLabel.text = "Scan for Duplicates"
         
@@ -1806,6 +1993,7 @@ class SettingsViewController: UIViewController {
             // Accuracy
             accuratePitchGroup,
             preciseSpeedGroup,
+            removeVocalsGroup,
             
             // Folders
             interfaceFolder,
@@ -1968,6 +2156,34 @@ class SettingsViewController: UIViewController {
         delegate?.settingsViewController(self, didChangeShowPresetsState: sender.isOn)
         UserDefaults.standard.set(sender.isOn, forKey: "isShowPresetsEnabled")
         impactFeedbackGenerator.impactOccurred()
+    }
+    
+    @objc private func removeVocalsSwitchChanged(_ sender: UISwitch) {
+        let isEnabled = sender.isOn
+        if isEnabled {
+            let alert = UIAlertController(title: "Process Audio?", message: "This will take a moment to process. Do you want to continue?", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel, handler: { _ in
+                sender.setOn(false, animated: true)
+            }))
+            alert.addAction(UIAlertAction(title: "Continue", style: .default, handler: { [weak self] _ in
+                guard let self = self else { return }
+                sender.isEnabled = false
+                self.delegate?.settingsViewController(self, didChangeRemoveVocalsState: true) { success in
+                    sender.isEnabled = true
+                    if !success {
+                        sender.setOn(false, animated: true)
+                    }
+                }
+                self.impactFeedbackGenerator.impactOccurred()
+            }))
+            present(alert, animated: true)
+        } else {
+            sender.isEnabled = false
+            delegate?.settingsViewController(self, didChangeRemoveVocalsState: false) { [weak self] _ in
+                sender.isEnabled = true
+                self?.impactFeedbackGenerator.impactOccurred()
+            }
+        }
     }
     
     @objc private func slowedReverbSpeedChanged(_ sender: UISegmentedControl) {
@@ -4563,8 +4779,10 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         progressSlider.value = Float(currentTime)
         currentTimeLabel.text = formatTime(seconds: currentTime)
         
-        // Update lock screen elapsed time frequently so it stays in sync
-        audioProcessor.syncNowPlayingInfo()
+        // Update lock screen elapsed time only when actually playing
+        if audioProcessor.isCurrentlyPlaying() {
+            audioProcessor.syncNowPlayingInfo()
+        }
         
         guard audioProcessor.isCurrentlyPlaying() else { return }
         
@@ -4903,6 +5121,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         settingsVC.isAutoPlayNextEnabled = self.isAutoPlayNextEnabled
         settingsVC.isStepperEnabled = self.isStepperEnabled
         settingsVC.isAutoLoadAddedSongEnabled = UserDefaults.standard.bool(forKey: "isAutoLoadAddedSongEnabled")
+        settingsVC.isRemoveVocalsEnabled = audioProcessor.isVocalRemovalEnabled()
         
         // Embed the SettingsViewController in a UINavigationController to display a navigation bar
         let navController = UINavigationController(rootViewController: settingsVC)
@@ -5024,6 +5243,68 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
     func settingsViewController(_ controller: SettingsViewController, didChangeShowPresetsState isEnabled: Bool) {
         self.isShowPresetsEnabled = isEnabled
         presetsStack.isHidden = !isEnabled
+    }
+    
+    func settingsViewController(_ controller: SettingsViewController, didChangeRemoveVocalsState isEnabled: Bool, completion: @escaping (Bool) -> Void) {
+        audioProcessor.setVocalLevel(0.0)
+        
+        if isEnabled {
+            let overlay = createLoadingHUD(in: controller.view, message: "Removing Vocals...")
+            controller.view.isUserInteractionEnabled = false
+            audioProcessor.setRemoveVocalsEnabled(true) { success in
+                DispatchQueue.main.async {
+                    overlay.removeFromSuperview()
+                    controller.view.isUserInteractionEnabled = true
+                    completion(success)
+                }
+            }
+        } else {
+            audioProcessor.setRemoveVocalsEnabled(false) { success in
+                DispatchQueue.main.async {
+                    completion(success)
+                }
+            }
+        }
+    }
+    
+    private func createLoadingHUD(in parentView: UIView, message: String) -> UIView {
+        let overlayView = UIView(frame: parentView.bounds)
+        overlayView.backgroundColor = UIColor.black.withAlphaComponent(0.6)
+        overlayView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        
+        let containerView = UIView()
+        containerView.backgroundColor = .secondarySystemGroupedBackground
+        containerView.layer.cornerRadius = 12
+        containerView.translatesAutoresizingMaskIntoConstraints = false
+        
+        let titleLabel = UILabel()
+        titleLabel.text = message
+        titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        
+        let spinner = UIActivityIndicatorView(style: .large)
+        spinner.startAnimating()
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        
+        containerView.addSubview(spinner)
+        containerView.addSubview(titleLabel)
+        overlayView.addSubview(containerView)
+        parentView.addSubview(overlayView)
+        
+        NSLayoutConstraint.activate([
+            containerView.centerXAnchor.constraint(equalTo: overlayView.centerXAnchor),
+            containerView.centerYAnchor.constraint(equalTo: overlayView.centerYAnchor),
+            containerView.widthAnchor.constraint(equalToConstant: 200),
+            containerView.heightAnchor.constraint(equalToConstant: 120),
+            
+            spinner.centerXAnchor.constraint(equalTo: containerView.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: containerView.centerYAnchor, constant: -10),
+            
+            titleLabel.topAnchor.constraint(equalTo: spinner.bottomAnchor, constant: 15),
+            titleLabel.centerXAnchor.constraint(equalTo: containerView.centerXAnchor)
+        ])
+        
+        return overlayView
     }
     
     /// Stops playback and resets the UI to the "No File Loaded" state.
