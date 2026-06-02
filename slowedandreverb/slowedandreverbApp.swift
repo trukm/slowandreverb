@@ -3592,11 +3592,28 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
     private var currentQueueIndex: Int = -1
     private var currentPresetIndex: Int?
     
+    // Cached initial values
+    private var initialSavedPitch: Float = 0
+    private var initialSavedSpeed: Float = 1.0
+    private var initialSavedReverb: Float = 0
+    private var initialSavedBass: Float = 0
+    private var initialSavedMids: Float = 0
+    private var initialSavedTreble: Float = 0
+
     // MARK: View Lifecycle
     
     private var hasLoadedInitialState = false
 
     override func viewDidLoad() {
+        // Cache initial slider values before any UI initialization can overwrite them
+        self.initialSavedPitch = UserDefaults.standard.float(forKey: "pitchValue")
+        let savedSpeedObj = UserDefaults.standard.object(forKey: "speedValue")
+        self.initialSavedSpeed = savedSpeedObj != nil ? UserDefaults.standard.float(forKey: "speedValue") : 1.0
+        self.initialSavedReverb = UserDefaults.standard.float(forKey: "reverbValue")
+        self.initialSavedBass = UserDefaults.standard.float(forKey: "bassValue")
+        self.initialSavedMids = UserDefaults.standard.float(forKey: "midsValue")
+        self.initialSavedTreble = UserDefaults.standard.float(forKey: "trebleValue")
+        
         self.isAccurateSpeedEnabled = UserDefaults.standard.bool(forKey: "isAccurateSpeedEnabled")
         self.isAccuratePitchEnabled = UserDefaults.standard.bool(forKey: "isAccuratePitchEnabled")
         self.isLoopingEnabled = UserDefaults.standard.bool(forKey: "isLoopingEnabled")
@@ -4286,7 +4303,9 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         
         // Reset to initial values
         if isHidden || !isRememberSettingsEnabled {
-            resetSliders()
+            if hasLoadedInitialState {
+                resetSliders()
+            }
         }
         
         playPauseButton.setImage(UIImage(systemName: "play.fill"), for: .normal)
@@ -4384,6 +4403,10 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
     
     private func setupStatePersistence() {
         NotificationCenter.default.addObserver(self, selector: #selector(savePlaybackPosition), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(savePlaybackPosition), name: UIApplication.willTerminateNotification, object: nil)
+        if #available(iOS 13.0, *) {
+            NotificationCenter.default.addObserver(self, selector: #selector(savePlaybackPosition), name: UIScene.didDisconnectNotification, object: nil)
+        }
     }
     
     @objc private func savePlaybackPosition() {
@@ -4474,28 +4497,22 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
                 loadSong(song, andPlay: false)
             
                 // Restore slider values AFTER loading the song so they aren't reset to defaults
-                let pitch = UserDefaults.standard.float(forKey: "pitchValue")
-                pitchSlider.value = pitch
+                pitchSlider.value = initialSavedPitch
                 pitchSliderChanged(pitchSlider)
                 
-                let speed = UserDefaults.standard.float(forKey: "speedValue")
-                speedSlider.value = speed != 0 ? speed : 1.0 // Default to 1.0 if not set
+                speedSlider.value = initialSavedSpeed != 0 ? initialSavedSpeed : 1.0 // Default to 1.0 if not set
                 speedSliderChanged(speedSlider)
                 
-                let reverb = UserDefaults.standard.float(forKey: "reverbValue")
-                reverbSlider.value = reverb
+                reverbSlider.value = initialSavedReverb
                 reverbSliderChanged(reverbSlider)
                 
-                let bass = UserDefaults.standard.float(forKey: "bassValue")
-                bassSlider.value = bass
+                bassSlider.value = initialSavedBass
                 bassSliderChanged(bassSlider)
                 
-                let mids = UserDefaults.standard.float(forKey: "midsValue")
-                midsSlider.value = mids
+                midsSlider.value = initialSavedMids
                 midsSliderChanged(midsSlider)
                 
-                let treble = UserDefaults.standard.float(forKey: "trebleValue")
-                trebleSlider.value = treble
+                trebleSlider.value = initialSavedTreble
                 trebleSliderChanged(trebleSlider)
                 
                 // Restore playback position after the file is loaded
@@ -5334,20 +5351,6 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         
         UserDefaults.standard.set(song.id.uuidString, forKey: "lastSongID")
         
-        // Apply saved values if they exist
-        if let savedPitch = song.savedPitch {
-            pitchSlider.value = savedPitch
-            pitchSliderChanged(pitchSlider)
-        }
-        if let savedSpeed = song.savedSpeed {
-            speedSlider.value = savedSpeed
-            speedSliderChanged(speedSlider)
-        }
-        if let savedReverb = song.savedReverb {
-            reverbSlider.value = savedReverb
-            reverbSliderChanged(reverbSlider)
-        }
-        
         // Load the audio file and get its metadata
         if let metadata = audioProcessor.loadAudioFile(url: url) {
             // Update UI with file information
@@ -5390,6 +5393,20 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
             // Re-apply EQ slider visibility based on user settings
             let isEQEnabled = UserDefaults.standard.bool(forKey: "isEQEnabled")
             settingsViewController(SettingsViewController(), didChangeShowEQState: isEQEnabled)
+
+            // Apply saved values if they exist, AFTER resetting controls state so they aren't overwritten
+            if let savedPitch = song.savedPitch {
+                pitchSlider.value = savedPitch
+                pitchSliderChanged(pitchSlider)
+            }
+            if let savedSpeed = song.savedSpeed {
+                speedSlider.value = savedSpeed
+                speedSliderChanged(speedSlider)
+            }
+            if let savedReverb = song.savedReverb {
+                reverbSlider.value = savedReverb
+                reverbSliderChanged(reverbSlider)
+            }
 
             // Update progress slider and labels for the new song
             let duration = audioProcessor.getAudioDuration()
