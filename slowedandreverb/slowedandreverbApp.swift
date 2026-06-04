@@ -5278,30 +5278,60 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
                 self.togglePlayback()
             }
             
-            let overlay = self.createLoadingHUD(in: self.view, message: "Generating Spectrogram...")
-            self.view.isUserInteractionEnabled = false
-            
-            SpectrogramProcessor.extractData(from: url) { [weak self] data in
-                guard let self = self else { return }
-                
-                DispatchQueue.main.async {
-                    overlay.removeFromSuperview()
-                    self.view.isUserInteractionEnabled = true
-                    
-                    if let data = data {
-                        self.impactFeedbackGenerator.impactOccurred()
-                        let previewVC = SpectrogramPreviewViewController(data: data)
-                        let nav = UINavigationController(rootViewController: previewVC)
-                        self.present(nav, animated: true)
-                    } else {
-                        let errorAlert = UIAlertController(title: "Error", message: "Failed to generate spectrogram.", preferredStyle: .alert)
-                        errorAlert.addAction(UIAlertAction(title: "OK", style: .default, handler: nil))
-                        self.present(errorAlert, animated: true)
-                    }
-                }
-            }
+            self.showSpectrogramResolutionPicker(for: url)
         }))
         self.present(alert, animated: true)
+    }
+    
+    private func showSpectrogramResolutionPicker(for url: URL) {
+        let actionSheet = UIAlertController(title: "Select Output Quality", message: "Higher resolutions provide more detail but take longer to process and use more memory.", preferredStyle: .actionSheet)
+        
+        let resolutions: [(title: String, size: CGSize)] = [
+            ("1080p (1920x1080)", CGSize(width: 1920, height: 1080)),
+            ("2K (2560x1440)", CGSize(width: 2560, height: 1440)),
+            ("4K (3840x2160)", CGSize(width: 3840, height: 2160)),
+            ("8K (7680x4320)", CGSize(width: 7680, height: 4320))
+        ]
+        
+        for resolution in resolutions {
+            actionSheet.addAction(UIAlertAction(title: resolution.title, style: .default, handler: { [weak self] _ in
+                self?.processSpectrogram(for: url, size: resolution.size)
+            }))
+        }
+        
+        actionSheet.addAction(UIAlertAction(title: "Cancel", style: .cancel, handler: nil))
+        
+        if let popover = actionSheet.popoverPresentationController {
+            popover.sourceView = generateSpectrogramButton
+            popover.sourceRect = generateSpectrogramButton.bounds
+        }
+        
+        present(actionSheet, animated: true)
+    }
+    
+    private func processSpectrogram(for url: URL, size: CGSize) {
+        let overlay = self.createLoadingHUD(in: self.view, message: "Generating Spectrogram...")
+        self.view.isUserInteractionEnabled = false
+        
+        SpectrogramProcessor.extractData(from: url, size: size) { [weak self] data in
+            guard let self = self else { return }
+            
+            DispatchQueue.main.async {
+                overlay.removeFromSuperview()
+                self.view.isUserInteractionEnabled = true
+                
+                if let data = data {
+                    self.impactFeedbackGenerator.impactOccurred()
+                    let previewVC = SpectrogramPreviewViewController(data: data)
+                    let nav = UINavigationController(rootViewController: previewVC)
+                    self.present(nav, animated: true)
+                } else {
+                    let errorAlert = UIAlertController(title: "Error", message: "Failed to generate spectrogram.", preferredStyle: .alert)
+                    errorAlert.addAction(UIAlertAction(title: "OK", style: .default, handler: nil))
+                    self.present(errorAlert, animated: true)
+                }
+            }
+        }
     }
     
     private func updateRemoveVocalsButtonState() {
