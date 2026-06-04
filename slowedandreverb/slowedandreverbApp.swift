@@ -5269,28 +5269,39 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
     @objc private func generateSpectrogramTapped() {
         guard let song = currentSong, let url = song.url else { return }
         
-        let overlay = createLoadingHUD(in: self.view, message: "Generating Spectrogram...")
-        self.view.isUserInteractionEnabled = false
-        
-        SpectrogramProcessor.generateSpectrogram(from: url) { [weak self] (image: UIImage?) in
+        let alert = UIAlertController(title: "Generate Spectrogram", message: "This will pause the current music playback and may take a moment. Do you want to continue?", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel, handler: nil))
+        alert.addAction(UIAlertAction(title: "Continue", style: .default, handler: { [weak self] _ in
             guard let self = self else { return }
-            overlay.removeFromSuperview()
-            self.view.isUserInteractionEnabled = true
             
-            if let image = image {
-                self.impactFeedbackGenerator.impactOccurred()
-                let activityVC = UIActivityViewController(activityItems: [image], applicationActivities: nil)
-                if let popover = activityVC.popoverPresentationController {
-                    popover.sourceView = self.generateSpectrogramButton
-                    popover.sourceRect = self.generateSpectrogramButton.bounds
-                }
-                self.present(activityVC, animated: true, completion: nil)
-            } else {
-                let errorAlert = UIAlertController(title: "Error", message: "Failed to generate spectrogram.", preferredStyle: .alert)
-                errorAlert.addAction(UIAlertAction(title: "OK", style: .default, handler: nil))
-                self.present(errorAlert, animated: true)
+            if self.audioProcessor.isCurrentlyPlaying() {
+                self.togglePlayback()
             }
-        }
+            
+            let overlay = self.createLoadingHUD(in: self.view, message: "Generating Spectrogram...")
+            self.view.isUserInteractionEnabled = false
+            
+            SpectrogramProcessor.extractData(from: url) { [weak self] data in
+                guard let self = self else { return }
+                
+                DispatchQueue.main.async {
+                    overlay.removeFromSuperview()
+                    self.view.isUserInteractionEnabled = true
+                    
+                    if let data = data {
+                        self.impactFeedbackGenerator.impactOccurred()
+                        let previewVC = SpectrogramPreviewViewController(data: data)
+                        let nav = UINavigationController(rootViewController: previewVC)
+                        self.present(nav, animated: true)
+                    } else {
+                        let errorAlert = UIAlertController(title: "Error", message: "Failed to generate spectrogram.", preferredStyle: .alert)
+                        errorAlert.addAction(UIAlertAction(title: "OK", style: .default, handler: nil))
+                        self.present(errorAlert, animated: true)
+                    }
+                }
+            }
+        }))
+        self.present(alert, animated: true)
     }
     
     private func updateRemoveVocalsButtonState() {
@@ -5312,6 +5323,8 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         let titleLabel = UILabel()
         titleLabel.text = message
         titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        titleLabel.numberOfLines = 0
+        titleLabel.textAlignment = .center
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         
         let spinner = UIActivityIndicatorView(style: .large)
@@ -5326,14 +5339,15 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         NSLayoutConstraint.activate([
             containerView.centerXAnchor.constraint(equalTo: overlayView.centerXAnchor),
             containerView.centerYAnchor.constraint(equalTo: overlayView.centerYAnchor),
-            containerView.widthAnchor.constraint(equalToConstant: 200),
+            containerView.widthAnchor.constraint(equalToConstant: 260),
             containerView.heightAnchor.constraint(equalToConstant: 120),
             
             spinner.centerXAnchor.constraint(equalTo: containerView.centerXAnchor),
             spinner.centerYAnchor.constraint(equalTo: containerView.centerYAnchor, constant: -10),
             
             titleLabel.topAnchor.constraint(equalTo: spinner.bottomAnchor, constant: 15),
-            titleLabel.centerXAnchor.constraint(equalTo: containerView.centerXAnchor)
+            titleLabel.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 15),
+            titleLabel.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -15)
         ])
         
         return overlayView
@@ -6254,4 +6268,106 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
 #Preview {
     AudioEffectsAppPreview()
+}
+
+// MARK: - Spectrogram Preview View Controller
+
+class SpectrogramPreviewViewController: UIViewController {
+    let spectrogramData: SpectrogramProcessor.SpectrogramData
+    var currentImage: UIImage?
+    
+    private let imageView = UIImageView()
+    private let colorSegmentedControl = UISegmentedControl(items: SpectrogramProcessor.ColorMapType.allCases.map { $0.rawValue })
+    
+    init(data: SpectrogramProcessor.SpectrogramData) {
+        self.spectrogramData = data
+        super.init(nibName: nil, bundle: nil)
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        title = "Spectrogram Preview"
+        
+        navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Close", style: .plain, target: self, action: #selector(cancelTapped))
+        
+        let saveItem = UIBarButtonItem(title: "Save to Photos", style: .done, target: self, action: #selector(saveTapped))
+        let shareItem = UIBarButtonItem(barButtonSystemItem: .action, target: self, action: #selector(shareTapped))
+        navigationItem.rightBarButtonItems = [saveItem, shareItem]
+        
+        imageView.contentMode = .scaleAspectFit
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(imageView)
+        
+        colorSegmentedControl.selectedSegmentIndex = 0
+        colorSegmentedControl.addTarget(self, action: #selector(colorMapChanged), for: .valueChanged)
+        colorSegmentedControl.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(colorSegmentedControl)
+        
+        NSLayoutConstraint.activate([
+            colorSegmentedControl.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
+            colorSegmentedControl.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            colorSegmentedControl.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
+            colorSegmentedControl.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20),
+            
+            imageView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
+            imageView.bottomAnchor.constraint(equalTo: colorSegmentedControl.topAnchor, constant: -20),
+            imageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            imageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20)
+        ])
+        
+        renderPreview()
+    }
+    
+    @objc private func colorMapChanged() {
+        renderPreview()
+    }
+    
+    private func renderPreview() {
+        let index = colorSegmentedControl.selectedSegmentIndex
+        let type = SpectrogramProcessor.ColorMapType.allCases[index]
+        
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            if let image = SpectrogramProcessor.renderImage(from: self.spectrogramData, colorMap: type) {
+                DispatchQueue.main.async {
+                    self.currentImage = image
+                    self.imageView.image = image
+                }
+            }
+        }
+    }
+    
+    @objc private func cancelTapped() {
+        dismiss(animated: true)
+    }
+    
+    @objc private func saveTapped() {
+        guard let image = currentImage else { return }
+        // Note: Using this method automatically prompts the user for Photos access if needed.
+        UIImageWriteToSavedPhotosAlbum(image, self, #selector(image(_:didFinishSavingWithError:contextInfo:)), nil)
+    }
+    
+    @objc private func image(_ image: UIImage, didFinishSavingWithError error: Error?, contextInfo: UnsafeRawPointer) {
+        if let error = error {
+            let alert = UIAlertController(title: "Save Failed", message: error.localizedDescription, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            present(alert, animated: true)
+        } else {
+            let alert = UIAlertController(title: "Saved!", message: "Your spectrogram has been saved to your Photo library.", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            present(alert, animated: true)
+        }
+    }
+    
+    @objc private func shareTapped() {
+        guard let image = currentImage else { return }
+        let activityVC = UIActivityViewController(activityItems: [image], applicationActivities: nil)
+        if let popover = activityVC.popoverPresentationController {
+            popover.barButtonItem = navigationItem.rightBarButtonItems?.last
+        }
+        present(activityVC, animated: true)
+    }
 }

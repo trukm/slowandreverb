@@ -5,12 +5,57 @@ import UIKit
 
 class SpectrogramProcessor {
     
-    /// Generates a spectrogram image from an audio file.
+    enum ColorMapType: String, CaseIterable {
+        case classic = "Classic"
+        case fire = "Fire"
+        case ocean = "Ocean"
+        case magma = "Magma"
+        case grayscale = "Gray"
+        
+        func lookupTable() -> [(r: UInt8, g: UInt8, b: UInt8)] {
+            var table = [(r: UInt8, g: UInt8, b: UInt8)]()
+            table.reserveCapacity(256)
+            for i in 0...255 {
+                let v = Float(i) / 255.0
+                switch self {
+                case .classic:
+                    table.append(SpectrogramProcessor.classicColor(value: v))
+                case .fire:
+                    let r = v < 0.33 ? (v/0.33)*255 : 255
+                    let g = v < 0.33 ? 0 : (v < 0.66 ? ((v-0.33)/0.33)*255 : 255)
+                    let b = v < 0.66 ? 0 : ((v-0.66)/0.34)*255
+                    table.append((UInt8(min(255, max(0, r))), UInt8(min(255, max(0, g))), UInt8(min(255, max(0, b)))))
+                case .ocean:
+                    let r = v < 0.66 ? 0 : ((v-0.66)/0.34)*255
+                    let g = v < 0.33 ? 0 : (v < 0.66 ? ((v-0.33)/0.33)*255 : 255)
+                    let b = v < 0.33 ? (v/0.33)*255 : 255
+                    table.append((UInt8(min(255, max(0, r))), UInt8(min(255, max(0, g))), UInt8(min(255, max(0, b)))))
+                case .magma:
+                    let r = v < 0.5 ? (v/0.5)*180 : 180 + ((v-0.5)/0.5)*75
+                    let g = v < 0.5 ? 0 : ((v-0.5)/0.5)*200
+                    let b = v < 0.5 ? (v/0.5)*200 : 200 + ((v-0.5)/0.5)*55
+                    table.append((UInt8(min(255, max(0, r))), UInt8(min(255, max(0, g))), UInt8(min(255, max(0, b)))))
+                case .grayscale:
+                    let c = UInt8(v * 255)
+                    table.append((c, c, c))
+                }
+            }
+            return table
+        }
+    }
+    
+    struct SpectrogramData {
+        let width: Int
+        let height: Int
+        let values: [Float] // Flattened grid of normalized values 0...1
+    }
+    
+    /// Generates the normalized raw data for a spectrogram from an audio file.
     /// - Parameters:
     ///   - url: URL of the audio file.
-    ///   - size: Desired size of the output image (default 1920x1080).
-    ///   - completion: Called with the resulting image or nil on failure.
-    static func generateSpectrogram(from url: URL, size: CGSize = CGSize(width: 1920, height: 1080), completion: @escaping (UIImage?) -> Void) {
+    ///   - size: Desired dimensions of the grid (default 1920x1080).
+    ///   - completion: Called with the resulting data struct or nil on failure.
+    static func extractData(from url: URL, size: CGSize = CGSize(width: 1920, height: 1080), completion: @escaping (SpectrogramData?) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let audioFile = try AVAudioFile(forReading: url)
@@ -96,13 +141,10 @@ class SpectrogramProcessor {
                     }
                 }
                 
-                var pixelData = [UInt8](repeating: 0, count: targetWidth * targetHeight * 4)
-                for i in stride(from: 3, to: pixelData.count, by: 4) {
-                    pixelData[i] = 255 // Opaque black background
-                }
-                
                 let minDb: Float = -80.0
                 let rangeDb = max(1.0, globalMaxMag - minDb)
+                
+                var normalizedValues = [Float](repeating: 0, count: targetWidth * targetHeight)
                 
                 let actualWidth = min(targetWidth, allMagnitudes.count)
                 for x in 0..<actualWidth {
@@ -116,27 +158,15 @@ class SpectrogramProcessor {
                         mag = max(minDb, mag)
                         let normalizedMag = max(0, min(1, (mag - minDb) / rangeDb))
                         
-                        let color = colorMap(value: normalizedMag)
-                        
-                        let pixelIndex = ((targetHeight - 1 - y) * targetWidth + x) * 4
-                        pixelData[pixelIndex] = color.r
-                        pixelData[pixelIndex + 1] = color.g
-                        pixelData[pixelIndex + 2] = color.b
+                        let index = (targetHeight - 1 - y) * targetWidth + x
+                        normalizedValues[index] = normalizedMag
                     }
                 }
                 
-                let colorSpace = CGColorSpaceCreateDeviceRGB()
-                let data = Data(pixelData)
-                
-                guard let providerRef = CGDataProvider(data: data as CFData),
-                      let cgImage = CGImage(width: targetWidth, height: targetHeight, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: targetWidth * 4, space: colorSpace, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue), provider: providerRef, decode: nil, shouldInterpolate: true, intent: .defaultIntent) else {
-                    DispatchQueue.main.async { completion(nil) }
-                    return
+                let resultData = SpectrogramData(width: targetWidth, height: targetHeight, values: normalizedValues)
+                DispatchQueue.main.async {
+                    completion(resultData)
                 }
-                
-                let image = UIImage(cgImage: cgImage)
-                DispatchQueue.main.async { completion(image) }
-                
             } catch {
                 print("Spectrogram Error: \(error)")
                 DispatchQueue.main.async { completion(nil) }
@@ -144,7 +174,37 @@ class SpectrogramProcessor {
         }
     }
     
-    private static func colorMap(value: Float) -> (r: UInt8, g: UInt8, b: UInt8) {
+    /// Renders an actual UIImage utilizing the normalized data array and applying the chosen ColorMapType
+    static func renderImage(from data: SpectrogramData, colorMap: ColorMapType) -> UIImage? {
+        let width = data.width
+        let height = data.height
+        var pixelData = [UInt8](repeating: 255, count: width * height * 4)
+        
+        let table = colorMap.lookupTable()
+        
+        for i in 0..<(width * height) {
+            let val = data.values[i]
+            let colorIdx = Int(val * 255)
+            let color = table[min(255, max(0, colorIdx))]
+            
+            let offset = i * 4
+            pixelData[offset] = color.r
+            pixelData[offset + 1] = color.g
+            pixelData[offset + 2] = color.b
+            // pixelData[offset + 3] = 255 (alpha, already 255 initialized)
+        }
+        
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let cgData = Data(pixelData)
+        guard let providerRef = CGDataProvider(data: cgData as CFData),
+              let cgImage = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4, space: colorSpace, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue), provider: providerRef, decode: nil, shouldInterpolate: true, intent: .defaultIntent) else {
+            return nil
+        }
+        
+        return UIImage(cgImage: cgImage)
+    }
+    
+    private static func classicColor(value: Float) -> (r: UInt8, g: UInt8, b: UInt8) {
         let v = max(0, min(1, value))
         if v < 0.25 { return (UInt8(0.2 * (v / 0.25) * 255), 0, UInt8(0.5 * (v / 0.25) * 255)) }
         else if v < 0.5 { return (UInt8((0.2 + 0.6 * ((v - 0.25) / 0.25)) * 255), 0, UInt8((0.5 - 0.3 * ((v - 0.25) / 0.25)) * 255)) }
