@@ -3668,6 +3668,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
     private let playPauseButton = UIButton(type: .system)
     private let libraryButton = UIButton(type: .system)
     private let removeVocalsButton = UIButton(type: .system)
+    private let generateSpectrogramButton = UIButton(type: .system)
     private let saveValuesButton = UIButton(type: .system)
     private let favoriteButton = UIButton(type: .system)
     private let repeatButton = UIButton(type: .system)
@@ -4162,6 +4163,18 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         removeVocalsButton.titleLabel?.minimumScaleFactor = 0.5
         removeVocalsButton.addTarget(self, action: #selector(removeVocalsTapped), for: .touchUpInside)
         
+        // Generate Spectrogram Button
+        var spectrogramConfig = UIButton.Configuration.filled()
+        spectrogramConfig.title = "Convert to Spectrogram"
+        spectrogramConfig.baseBackgroundColor = .secondarySystemFill
+        spectrogramConfig.baseForegroundColor = .label
+        spectrogramConfig.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 10, bottom: 12, trailing: 10)
+        spectrogramConfig.titleLineBreakMode = .byTruncatingTail
+        generateSpectrogramButton.configuration = spectrogramConfig
+        generateSpectrogramButton.titleLabel?.adjustsFontSizeToFitWidth = true
+        generateSpectrogramButton.titleLabel?.minimumScaleFactor = 0.5
+        generateSpectrogramButton.addTarget(self, action: #selector(generateSpectrogramTapped), for: .touchUpInside)
+        
         // Favorite Button
         var favConfig = UIButton.Configuration.filled()
         favConfig.title = "Favorite"
@@ -4278,7 +4291,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         saveAndResetStack.spacing = 20
         saveAndResetStack.distribution = .fillEqually
         
-        let bottomActionsStack = UIStackView(arrangedSubviews: [saveAndResetStack, removeVocalsButton, exportButton])
+        let bottomActionsStack = UIStackView(arrangedSubviews: [saveAndResetStack, generateSpectrogramButton, removeVocalsButton, exportButton])
         bottomActionsStack.axis = .vertical
         bottomActionsStack.spacing = 50
         bottomActionsStack.distribution = .fill
@@ -4453,6 +4466,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         previousTrackButton.isHidden = isHidden
         nextTrackButton.isHidden = isHidden
         resetButton.isHidden = isHidden
+        generateSpectrogramButton.isHidden = isHidden
         removeVocalsButton.isHidden = isHidden
         saveValuesButton.isHidden = isHidden
         favoriteButton.isHidden = isHidden
@@ -5248,6 +5262,33 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
                     self?.updateRemoveVocalsButtonState()
                     if success { self?.impactFeedbackGenerator.impactOccurred() }
                 }
+            }
+        }
+    }
+    
+    @objc private func generateSpectrogramTapped() {
+        guard let song = currentSong, let url = song.url else { return }
+        
+        let overlay = createLoadingHUD(in: self.view, message: "Generating Spectrogram...")
+        self.view.isUserInteractionEnabled = false
+        
+        SpectrogramProcessor.generateSpectrogram(from: url) { [weak self] (image: UIImage?) in
+            guard let self = self else { return }
+            overlay.removeFromSuperview()
+            self.view.isUserInteractionEnabled = true
+            
+            if let image = image {
+                self.impactFeedbackGenerator.impactOccurred()
+                let activityVC = UIActivityViewController(activityItems: [image], applicationActivities: nil)
+                if let popover = activityVC.popoverPresentationController {
+                    popover.sourceView = self.generateSpectrogramButton
+                    popover.sourceRect = self.generateSpectrogramButton.bounds
+                }
+                self.present(activityVC, animated: true, completion: nil)
+            } else {
+                let errorAlert = UIAlertController(title: "Error", message: "Failed to generate spectrogram.", preferredStyle: .alert)
+                errorAlert.addAction(UIAlertAction(title: "OK", style: .default, handler: nil))
+                self.present(errorAlert, animated: true)
             }
         }
     }
