@@ -5,16 +5,34 @@ import UIKit
 
 class SpectrogramProcessor {
     
-    enum ColorMapType: String, CaseIterable {
-        case classic = "Classic"
-        case fire = "Fire"
-        case ocean = "Ocean"
-        case magma = "Magma"
-        case grayscale = "Gray"
+    enum ColorMapType {
+        case classic
+        case fire
+        case ocean
+        case magma
+        case grayscale
+        case albumArt(UIColor)
+        
+        var name: String {
+            switch self {
+            case .classic: return "Classic"
+            case .fire: return "Fire"
+            case .ocean: return "Ocean"
+            case .magma: return "Magma"
+            case .grayscale: return "Grayscale"
+            case .albumArt: return "Album Art Colors"
+            }
+        }
         
         func lookupTable() -> [(r: UInt8, g: UInt8, b: UInt8)] {
             var table = [(r: UInt8, g: UInt8, b: UInt8)]()
             table.reserveCapacity(256)
+            
+            var baseR: CGFloat = 0, baseG: CGFloat = 0, baseB: CGFloat = 0
+            if case .albumArt(let color) = self {
+                color.getRed(&baseR, green: &baseG, blue: &baseB, alpha: nil)
+            }
+            
             for i in 0...255 {
                 let v = Float(i) / 255.0
                 switch self {
@@ -38,6 +56,22 @@ class SpectrogramProcessor {
                 case .grayscale:
                     let c = UInt8(v * 255)
                     table.append((c, c, c))
+                case .albumArt:
+                    let r, g, b: CGFloat
+                    if v < 0.5 {
+                        let f = CGFloat(v / 0.5)
+                        r = baseR * f
+                        g = baseG * f
+                        b = baseB * f
+                    } else {
+                        let f = CGFloat((v - 0.5) / 0.5)
+                        r = baseR + (1.0 - baseR) * f
+                        g = baseG + (1.0 - baseG) * f
+                        b = baseB + (1.0 - baseB) * f
+                    }
+                    table.append((UInt8(min(255, max(0, r * 255))), 
+                                  UInt8(min(255, max(0, g * 255))), 
+                                  UInt8(min(255, max(0, b * 255)))))
                 }
             }
             return table

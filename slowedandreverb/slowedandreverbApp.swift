@@ -5107,7 +5107,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         
         // Present as a sheet
         if let sheet = navController.sheetPresentationController {
-            sheet.detents = [.medium(), .large()]
+            sheet.detents = [.large()]
             sheet.prefersGrabberVisible = true
             impactFeedbackGenerator.impactOccurred()
         }
@@ -5278,24 +5278,29 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
                 self.togglePlayback()
             }
             
-            self.showSpectrogramResolutionPicker(for: url)
+            self.showSpectrogramColorPicker(for: url)
         }))
         self.present(alert, animated: true)
     }
     
-    private func showSpectrogramResolutionPicker(for url: URL) {
-        let actionSheet = UIAlertController(title: "Select Output Quality", message: "Higher resolutions provide more detail but take longer to process and use more memory.", preferredStyle: .actionSheet)
+    private func showSpectrogramColorPicker(for url: URL) {
+        let actionSheet = UIAlertController(title: "Select Color Profile", message: nil, preferredStyle: .actionSheet)
         
-        let resolutions: [(title: String, size: CGSize)] = [
-            ("1080p (1920x1080)", CGSize(width: 1920, height: 1080)),
-            ("2K (2560x1440)", CGSize(width: 2560, height: 1440)),
-            ("4K (3840x2160)", CGSize(width: 3840, height: 2160)),
-            ("8K (7680x4320)", CGSize(width: 7680, height: 4320))
+        let albumArtColor = getDominantColor(from: albumArtImageView.image ?? UIImage()) ?? .systemBlue
+        let vibrantColor = makeVibrant(color: albumArtColor) ?? albumArtColor
+        
+        let profiles: [SpectrogramProcessor.ColorMapType] = [
+            .classic,
+            .fire,
+            .ocean,
+            .magma,
+            .grayscale,
+            .albumArt(vibrantColor)
         ]
         
-        for resolution in resolutions {
-            actionSheet.addAction(UIAlertAction(title: resolution.title, style: .default, handler: { [weak self] _ in
-                self?.processSpectrogram(for: url, size: resolution.size)
+        for profile in profiles {
+            actionSheet.addAction(UIAlertAction(title: profile.name, style: .default, handler: { [weak self] _ in
+                self?.showSpectrogramResolutionPicker(for: url, colorProfile: profile)
             }))
         }
         
@@ -5309,7 +5314,33 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         present(actionSheet, animated: true)
     }
     
-    private func processSpectrogram(for url: URL, size: CGSize) {
+    private func showSpectrogramResolutionPicker(for url: URL, colorProfile: SpectrogramProcessor.ColorMapType) {
+        let actionSheet = UIAlertController(title: "Select Output Quality", message: "Higher resolutions provide more detail but take longer to process and use more memory.", preferredStyle: .actionSheet)
+        
+        let resolutions: [(title: String, size: CGSize)] = [
+            ("1080p (1920x1080)", CGSize(width: 1920, height: 1080)),
+            ("2K (2560x1440)", CGSize(width: 2560, height: 1440)),
+            ("4K (3840x2160)", CGSize(width: 3840, height: 2160)),
+            ("8K (7680x4320)", CGSize(width: 7680, height: 4320))
+        ]
+        
+        for resolution in resolutions {
+            actionSheet.addAction(UIAlertAction(title: resolution.title, style: .default, handler: { [weak self] _ in
+                self?.processSpectrogram(for: url, size: resolution.size, colorProfile: colorProfile)
+            }))
+        }
+        
+        actionSheet.addAction(UIAlertAction(title: "Cancel", style: .cancel, handler: nil))
+        
+        if let popover = actionSheet.popoverPresentationController {
+            popover.sourceView = generateSpectrogramButton
+            popover.sourceRect = generateSpectrogramButton.bounds
+        }
+        
+        present(actionSheet, animated: true)
+    }
+    
+    private func processSpectrogram(for url: URL, size: CGSize, colorProfile: SpectrogramProcessor.ColorMapType) {
         let overlay = self.createLoadingHUD(in: self.view, message: "Generating Spectrogram...")
         self.view.isUserInteractionEnabled = false
         
@@ -5322,7 +5353,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
                 
                 if let data = data {
                     self.impactFeedbackGenerator.impactOccurred()
-                    let previewVC = SpectrogramPreviewViewController(data: data)
+                    let previewVC = SpectrogramPreviewViewController(data: data, colorProfile: colorProfile)
                     let nav = UINavigationController(rootViewController: previewVC)
                     self.present(nav, animated: true)
                 } else {
@@ -6304,13 +6335,14 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
 class SpectrogramPreviewViewController: UIViewController {
     let spectrogramData: SpectrogramProcessor.SpectrogramData
+    let colorProfile: SpectrogramProcessor.ColorMapType
     var currentImage: UIImage?
     
     private let imageView = UIImageView()
-    private let colorSegmentedControl = UISegmentedControl(items: SpectrogramProcessor.ColorMapType.allCases.map { $0.rawValue })
     
-    init(data: SpectrogramProcessor.SpectrogramData) {
+    init(data: SpectrogramProcessor.SpectrogramData, colorProfile: SpectrogramProcessor.ColorMapType) {
         self.spectrogramData = data
+        self.colorProfile = colorProfile
         super.init(nibName: nil, bundle: nil)
     }
     
@@ -6331,19 +6363,9 @@ class SpectrogramPreviewViewController: UIViewController {
         imageView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(imageView)
         
-        colorSegmentedControl.selectedSegmentIndex = 0
-        colorSegmentedControl.addTarget(self, action: #selector(colorMapChanged), for: .valueChanged)
-        colorSegmentedControl.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(colorSegmentedControl)
-        
         NSLayoutConstraint.activate([
-            colorSegmentedControl.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
-            colorSegmentedControl.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            colorSegmentedControl.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
-            colorSegmentedControl.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20),
-            
             imageView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
-            imageView.bottomAnchor.constraint(equalTo: colorSegmentedControl.topAnchor, constant: -20),
+            imageView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
             imageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
             imageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20)
         ])
@@ -6351,20 +6373,26 @@ class SpectrogramPreviewViewController: UIViewController {
         renderPreview()
     }
     
-    @objc private func colorMapChanged() {
-        renderPreview()
-    }
-    
     private func renderPreview() {
-        let index = colorSegmentedControl.selectedSegmentIndex
-        let type = SpectrogramProcessor.ColorMapType.allCases[index]
+        let overlay = UIView(frame: view.bounds)
+        overlay.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        let spinner = UIActivityIndicatorView(style: .large)
+        spinner.center = view.center
+        spinner.startAnimating()
+        overlay.addSubview(spinner)
+        view.addSubview(overlay)
         
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            if let image = SpectrogramProcessor.renderImage(from: self.spectrogramData, colorMap: type) {
+            if let image = SpectrogramProcessor.renderImage(from: self.spectrogramData, colorMap: self.colorProfile) {
                 DispatchQueue.main.async {
                     self.currentImage = image
                     self.imageView.image = image
+                    overlay.removeFromSuperview()
+                }
+            } else {
+                DispatchQueue.main.async {
+                    overlay.removeFromSuperview()
                 }
             }
         }
