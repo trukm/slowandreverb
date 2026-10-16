@@ -12,10 +12,12 @@
 		4525C39A2EACF8FF00667FE0 /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
 		4525C3AB2EACF9EC00667FE0 /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
 		4543447E2FCAF15B007D59B2 /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
+		45614CCC3077AAFC0009CFDD /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
 		457269182F381B5F009D9222 /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
+		45749EB9306D24B800F21016 /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
 		457A546F2FAF772200BB409E /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
 		4593BD0C2F1F9B560029D21C /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
-		459AD5022FD1C81A009AC46A /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
+		45951D37308262E400DA4090 /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
 		45E896C02F04E9EB0036CB34 /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
 		45E897102F0D3B590036CB34 /* slowedandreverb.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = slowedandreverb.xcodeproj; sourceTree = "<group>"; };
 		45EC836D2EA8ACFA00A85E48 /* slowedandreverb.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = slowedandreverb.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -78,7 +80,36 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		45614CD13077AAFC0009CFDD /* Products */ = {
+			isa = PBXGroup;
+			name = Products;
+			sourceTree = "<group>";
+		};
 		4572691B2F381B5F009D9222 /* Products */ = {
+			isa = PBXGroup;
+			name = Products;
+			sourceTree = "<group>";
+		};
+		45749EB4306D24B800F21016 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				457269182F381B5F009D9222 /* slowedandreverb.xcodeproj */,
+				45163E092F9EF99F00BAD0BF /* slowedandreverb.xcodeproj */,
+				451F836A2EAA676B00F72198 /* slowedandreverb.xcodeproj */,
+				4543447E2FCAF15B007D59B2 /* slowedandreverb.xcodeproj */,
+				457A546F2FAF772200BB409E /* slowedandreverb.xcodeproj */,
+				4593BD0C2F1F9B560029D21C /* slowedandreverb.xcodeproj */,
+				4525C39A2EACF8FF00667FE0 /* slowedandreverb.xcodeproj */,
+				45E896C02F04E9EB0036CB34 /* slowedandreverb.xcodeproj */,
+				45E897102F0D3B590036CB34 /* slowedandreverb.xcodeproj */,
+				4525C3AB2EACF9EC00667FE0 /* slowedandreverb.xcodeproj */,
+				45749EB9306D24B800F21016 /* slowedandreverb.xcodeproj */,
+				45614CCC3077AAFC0009CFDD /* slowedandreverb.xcodeproj */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
+		45749EBE306D24B800F21016 /* Products */ = {
 			isa = PBXGroup;
 			name = Products;
 			sourceTree = "<group>";
@@ -93,7 +124,7 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		459AD5062FD1C81A009AC46A /* Products */ = {
+		45951D3C308262E400DA4090 /* Products */ = {
 			isa = PBXGroup;
 			name = Products;
 			sourceTree = "<group>";
@@ -113,6 +144,7 @@
 			children = (
 				45EC836F2EA8ACFA00A85E48 /* slowedandreverb */,
 				45EC836E2EA8ACFA00A85E48 /* Products */,
+				45749EB4306D24B800F21016 /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -182,6 +214,10 @@
 					ProjectRef = 457269182F381B5F009D9222 /* slowedandreverb.xcodeproj */;
 				},
 				{
+					ProductGroup = 45951D3C308262E400DA4090 /* Products */;
+					ProjectRef = 45951D37308262E400DA4090 /* slowedandreverb.xcodeproj */;
+				},
+				{
 					ProductGroup = 45163E0C2F9EF99F00BAD0BF /* Products */;
 					ProjectRef = 45163E092F9EF99F00BAD0BF /* slowedandreverb.xcodeproj */;
 				},
@@ -198,10 +234,6 @@
 					ProjectRef = 457A546F2FAF772200BB409E /* slowedandreverb.xcodeproj */;
 				},
 				{
-					ProductGroup = 459AD5062FD1C81A009AC46A /* Products */;
-					ProjectRef = 459AD5022FD1C81A009AC46A /* slowedandreverb.xcodeproj */;
-				},
-				{
 					ProductGroup = 4593BD0F2F1F9B560029D21C /* Products */;
 					ProjectRef = 4593BD0C2F1F9B560029D21C /* slowedandreverb.xcodeproj */;
 				},
@@ -214,12 +246,20 @@
 					ProjectRef = 45E896C02F04E9EB0036CB34 /* slowedandreverb.xcodeproj */;
 				},
 				{
+					ProductGroup = 45749EBE306D24B800F21016 /* Products */;
+					ProjectRef = 45749EB9306D24B800F21016 /* slowedandreverb.xcodeproj */;
+				},
+				{
 					ProductGroup = 45E897132F0D3B590036CB34 /* Products */;
 					ProjectRef = 45E897102F0D3B590036CB34 /* slowedandreverb.xcodeproj */;
 				},
 				{
 					ProductGroup = 4525C3AE2EACF9EC00667FE0 /* Products */;
 					ProjectRef = 4525C3AB2EACF9EC00667FE0 /* slowedandreverb.xcodeproj */;
+				},
+				{
+					ProductGroup = 45614CD13077AAFC0009CFDD /* Products */;
+					ProjectRef = 45614CCC3077AAFC0009CFDD /* slowedandreverb.xcodeproj */;
 				},
 			);
 			projectRoot = "";
@@ -371,23 +411,15 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				AUTOMATION_APPLE_EVENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = X4X94845YS;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
-				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
-				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
-				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
-				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
-				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = slowedandreverb/Info.plist;
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -405,12 +437,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.slowedandreverb;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
-				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
-				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
-				RUNTIME_EXCEPTION_ALLOW_UNSIGNED_EXECUTABLE_MEMORY = NO;
-				RUNTIME_EXCEPTION_DEBUGGING_TOOL = NO;
-				RUNTIME_EXCEPTION_DISABLE_EXECUTABLE_PAGE_PROTECTION = NO;
-				RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION = NO;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
@@ -429,23 +455,15 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				AUTOMATION_APPLE_EVENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = X4X94845YS;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
-				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
-				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
-				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
-				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
-				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = slowedandreverb/Info.plist;
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -463,12 +481,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.slowedandreverb;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
-				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
-				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
-				RUNTIME_EXCEPTION_ALLOW_UNSIGNED_EXECUTABLE_MEMORY = NO;
-				RUNTIME_EXCEPTION_DEBUGGING_TOOL = NO;
-				RUNTIME_EXCEPTION_DISABLE_EXECUTABLE_PAGE_PROTECTION = NO;
-				RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION = NO;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
