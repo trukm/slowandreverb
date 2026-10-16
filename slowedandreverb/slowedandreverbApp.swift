@@ -26,6 +26,9 @@ class AudioProcessor {
     private let equalizerNode = AVAudioUnitEQ(numberOfBands: 3) // For Bass, Mids, Treble
     private var isPitchCorrectionEnabled = true
     private var needsReschedule = false
+    private var needsSegmentReschedule = false
+    private var scheduleGeneration: Int = 0
+    private var wasPlayingBeforeInterruption = false
     private var isExporting = false // Flag to prevent concurrent exports
     
     private var audioFile: AVAudioFile?
@@ -39,6 +42,7 @@ class AudioProcessor {
     private var audioFileLength: AVAudioFramePosition = 0
     private var audioSampleRate: Double = 0
     private var lastPlaybackPosition: AVAudioFramePosition = 0
+    private var lastKnownFramePosition: AVAudioFramePosition = 0
     private var pausedPosition: AVAudioFramePosition? // Tracks position when paused
     
     // Property to hold the static Now Playing info
@@ -62,16 +66,19 @@ class AudioProcessor {
 
     init() {
         configureAudioSession()
-        setupInterruptionObserver() // Add interruption observer
+        setupInterruptionObserver() // Add interruption and route change observers
         setupAudioEngine()
     }
     
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
     
     /// Configures the AVAudioSession for background playback.
     private func configureAudioSession() {
         do {
             // Set the category to .playback so audio continues when the screen is locked
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
             try AVAudioSession.sharedInstance().setActive(true)
             print("AVAudioSession configured for background playback.")
         } catch {
@@ -138,15 +145,48 @@ class AudioProcessor {
         engine.connect(equalizerNode, to: reverbNode, format: format)
         engine.connect(reverbNode, to: engine.mainMixerNode, format: format)
     }
+
+    /// Helper to schedule a segment with generation tracking so cancelled segments never trigger false completion callbacks.
+    private func scheduleCurrentFileSegment(from startingFrame: AVAudioFramePosition) {
+        guard let file = audioFile else { return }
+        let safeStart = max(0, min(startingFrame, audioFileLength))
+        let remainingFrames = audioFileLength - safeStart
+        guard remainingFrames > 0 else {
+            needsReschedule = true
+            return
+        }
+
+        scheduleGeneration += 1
+        let currentGen = scheduleGeneration
+        lastPlaybackPosition = safeStart
+        lastKnownFramePosition = safeStart
+        needsReschedule = false
+        needsSegmentReschedule = false
+
+        playerNode.scheduleSegment(
+            file,
+            startingFrame: safeStart,
+            frameCount: AVAudioFrameCount(remainingFrames),
+            at: nil,
+            completionCallbackType: .dataPlayedBack
+        ) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self = self, self.scheduleGeneration == currentGen else { return }
+                self.needsReschedule = true
+            }
+        }
+    }
     
     // MARK: File Loading and Playback
 
     /// Loads an audio file and extracts its metadata.
     func loadAudioFile(url: URL) -> (title: String, artist: String?, artwork: UIImage?)? {
         // Stop current playback and reset engine
+        scheduleGeneration += 1
         playerNode.stop()
         engine.stop()
         isPlaying = false
+        wasPlayingBeforeInterruption = false
         
         do {
             self.audioFile = try AVAudioFile(forReading: url)
@@ -156,6 +196,7 @@ class AudioProcessor {
             self.audioFileLength = file.length
             self.audioSampleRate = file.processingFormat.sampleRate
             self.lastPlaybackPosition = 0 // Reset position for new file
+            self.lastKnownFramePosition = 0
             self.pausedPosition = nil
             
             // Reconnect nodes with the audio file's processing format to ensure effects work correctly.
@@ -184,42 +225,42 @@ class AudioProcessor {
                 }
             }
 
-            // Prepare the static "Now Playing" info once.
-            self.nowPlayingInfo = [
-                MPMediaItemPropertyTitle: songTitle ?? url.deletingPathExtension().lastPathComponent,
-                MPMediaItemPropertyArtist: artistName,
-                MPMediaItemPropertyAlbumTitle: albumName,
+            let resolvedTitle = songTitle ?? url.deletingPathExtension().lastPathComponent
+
+            // Prepare the static "Now Playing" info once (avoid inserting nil optionals into dictionary).
+            var info: [String: Any] = [
+                MPMediaItemPropertyTitle: resolvedTitle,
                 MPMediaItemPropertyPlaybackDuration: getAudioDuration(),
                 MPNowPlayingInfoPropertyElapsedPlaybackTime: 0.0,
-                MPNowPlayingInfoPropertyPlaybackRate: 0.0  // Initially paused
+                MPNowPlayingInfoPropertyPlaybackRate: 0.0, // Initially paused
+                MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0
             ]
-            
+            if let artistName = artistName {
+                info[MPMediaItemPropertyArtist] = artistName
+            }
+            if let albumName = albumName {
+                info[MPMediaItemPropertyAlbumTitle] = albumName
+            }
             if let artwork = artworkImage {
-                self.nowPlayingInfo?[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: artwork.size) { _ in artwork }
+                info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: artwork.size) { _ in artwork }
             }
+            self.nowPlayingInfo = info
 
-            // Schedule the file to loop and prepare for playback
-            playerNode.scheduleFile(file, at: nil) { [weak self] in // Schedule the whole file initially
-                // This completion handler is called when the file has finished playing.
-                // We need to reschedule it for the next playback.
-                self?.needsReschedule = true
-            }
+            // Schedule the file and prepare for playback
+            scheduleCurrentFileSegment(from: 0)
 
-            let title = songTitle ?? url.deletingPathExtension().lastPathComponent
-            self.currentTitle = title
+            self.currentTitle = resolvedTitle
             self.currentArtist = artistName
             self.currentArtwork = artworkImage
             
-            print("Audio file loaded: \(title)")
+            print("Audio file loaded: \(resolvedTitle)")
             
             // Immediately sync the now playing info to the lock screen
-            DispatchQueue.main.async { [weak self] in
-                self?.syncNowPlayingInfo()
-            }
+            syncNowPlayingInfo()
             
             self.isRemoveVocalsEnabled = false
             
-            return (title: title, artist: artistName, artwork: artworkImage)
+            return (title: resolvedTitle, artist: artistName, artwork: artworkImage)
             
         } catch {
             print("Error loading audio file: \(error.localizedDescription)")
@@ -235,47 +276,63 @@ class AudioProcessor {
     /// Resumes playback explicitly.
     func play() {
         guard audioFile != nil else { return }
-        if isPlaying { return }
+        wasPlayingBeforeInterruption = false
+
+        // Only return early if both our state and the underlying engine/playerNode are actively playing
+        if isPlaying && playerNode.isPlaying && engine.isRunning && !needsReschedule && !needsSegmentReschedule {
+            syncNowPlayingInfo()
+            return
+        }
 
         // Activate audio session to ensure playback can resume
         do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
             print("Failed to activate audio session: \(error.localizedDescription)")
         }
 
-        // If the file finished playing, we need to stop, reschedule, and then play.
-        if needsReschedule {
-            playerNode.stop()
-            if !engine.isRunning {
+        let engineWasStopped = !engine.isRunning
+
+        // Ensure the engine is running before scheduling/playing
+        if !engine.isRunning {
+            do {
+                try engine.start()
+            } catch {
+                // Reconnect nodes and retry if hardware route changed while stopped
+                if let file = audioFile {
+                    connectNodes(format: file.processingFormat)
+                }
                 try? engine.start()
             }
-            guard let file = audioFile else { return }
-            lastPlaybackPosition = 0
-            pausedPosition = nil
-            let frameCount = AVAudioFrameCount(audioFileLength - lastPlaybackPosition)
-            playerNode.scheduleSegment(file, startingFrame: lastPlaybackPosition, frameCount: frameCount, at: nil) { [weak self] in
-                self?.needsReschedule = true
-            }
-            needsReschedule = false
         }
 
-        // Ensure the engine is running
-        if !engine.isRunning {
-            try? engine.start()
+        // If the file finished playing, restart from 0.
+        // If the engine stopped while paused/interrupted or needs segment reschedule, resume from pausedPosition.
+        if needsReschedule {
+            scheduleGeneration += 1
+            playerNode.stop()
+            pausedPosition = nil
+            scheduleCurrentFileSegment(from: 0)
+        } else if engineWasStopped || needsSegmentReschedule {
+            let resumeFrame = pausedPosition ?? lastKnownFramePosition
+            scheduleGeneration += 1
+            playerNode.stop()
+            let startFrame = (resumeFrame >= 0 && resumeFrame < audioFileLength) ? resumeFrame : 0
+            scheduleCurrentFileSegment(from: startFrame)
         }
 
         pausedPosition = nil
         playerNode.play()
         isPlaying = true
         print("Playback started/resumed. playerNode.isPlaying = \(playerNode.isPlaying)")
-        // Update lock screen immediately
-        syncNowPlayingInfo()
+        // Update lock screen synchronously
+        updateNowPlayingInfo(isPaused: false)
     }
 
     /// Starts or stops the playback and handles file rescheduling for looping.
     func togglePlayback() {
-        if isPlaying {
+        if isCurrentlyPlaying() {
             pause()
         } else {
             play()
@@ -284,49 +341,67 @@ class AudioProcessor {
     
     /// Pauses playback explicitly.
     func pause() {
+        wasPlayingBeforeInterruption = false
+        if let currentPos = getCurrentFramePosition() {
+            pausedPosition = currentPos
+            lastKnownFramePosition = currentPos
+        } else if pausedPosition == nil {
+            pausedPosition = lastKnownFramePosition
+        }
+
         if playerNode.isPlaying {
-            pausedPosition = getCurrentFramePosition() // Capture position before pausing
             playerNode.pause()
+        }
+        if !engine.isRunning {
+            needsSegmentReschedule = true
         }
         isPlaying = false
         print("Playback paused. isPlaying=\(isPlaying), playerNode.isPlaying=\(playerNode.isPlaying)")
-        // Update lock screen immediately
-        syncNowPlayingInfo()
+        // Update lock screen synchronously
+        updateNowPlayingInfo(isPaused: true)
     }
     
     /// Seeks to a specific time in the audio file.
     /// - Parameter time: The time in seconds to seek to.
     func seek(to time: Double) {
-        guard let audioFile = audioFile, audioSampleRate > 0 else { return }
+        guard audioFile != nil, audioSampleRate > 0 else { return }
 
-        let wasPlaying = playerNode.isPlaying
+        let wasPlaying = isCurrentlyPlaying()
+        scheduleGeneration += 1
         playerNode.stop()
 
-        let startingFrame = AVAudioFramePosition(time * audioSampleRate)
-        let frameCount = AVAudioFrameCount(audioFileLength - startingFrame)
+        let clampedTime = max(0, min(time, getAudioDuration()))
+        let startingFrame = min(AVAudioFramePosition(clampedTime * audioSampleRate), max(0, audioFileLength - 1))
+        let frameCount = AVAudioFrameCount(max(0, audioFileLength - startingFrame))
 
         guard frameCount > 0 else {
             print("Seek time is out of bounds.")
             return
         }
 
-        lastPlaybackPosition = startingFrame
         pausedPosition = startingFrame // Update paused position so UI shows correct time if paused
-        needsReschedule = false
-
-        playerNode.scheduleSegment(audioFile, startingFrame: startingFrame, frameCount: frameCount, at: nil) { [weak self] in
-            self?.needsReschedule = true
-        }
+        scheduleCurrentFileSegment(from: startingFrame)
 
         if wasPlaying {
+            if !engine.isRunning {
+                try? engine.start()
+            }
             pausedPosition = nil
             playerNode.play()
+            isPlaying = true
+        } else {
+            isPlaying = false
         }
         updateNowPlayingInfo(isPaused: !wasPlaying)
     }
     
     func isCurrentlyPlaying() -> Bool {
-        return playerNode.isPlaying
+        return isPlaying && playerNode.isPlaying && engine.isRunning
+    }
+
+    /// Returns true when playback reached the end of the scheduled audio file.
+    func didFinishPlaying() -> Bool {
+        return isPlaying && needsReschedule
     }
     
     /// Returns the total duration of the audio file in seconds.
@@ -338,16 +413,22 @@ class AudioProcessor {
     /// Returns the current playback time in seconds.
     func getCurrentTime() -> Double {
         guard audioSampleRate > 0 else { return 0 }
-        if let paused = pausedPosition, !isPlaying {
+        if !isCurrentlyPlaying(), let paused = pausedPosition {
             return Double(paused) / audioSampleRate
         }
-        guard let position = getCurrentFramePosition() else { return Double(lastPlaybackPosition) / audioSampleRate }
-        return Double(position) / audioSampleRate
+        if let position = getCurrentFramePosition() {
+            return Double(position) / audioSampleRate
+        }
+        return Double(pausedPosition ?? lastKnownFramePosition) / audioSampleRate
     }
     
     private func getCurrentFramePosition() -> AVAudioFramePosition? {
-        guard let nodeTime = playerNode.lastRenderTime, let playerTime = playerNode.playerTime(forNodeTime: nodeTime) else { return nil }
-        return lastPlaybackPosition + playerTime.sampleTime
+        guard playerNode.isPlaying,
+              let nodeTime = playerNode.lastRenderTime,
+              let playerTime = playerNode.playerTime(forNodeTime: nodeTime) else { return nil }
+        let position = min(max(0, lastPlaybackPosition + playerTime.sampleTime), audioFileLength)
+        lastKnownFramePosition = position
+        return position
     }
     
     // MARK: Vocal Removal Control
@@ -369,18 +450,19 @@ class AudioProcessor {
                 self.audioFile = original
             }
             
-            let wasPlaying = playerNode.isPlaying
+            let wasPlaying = isCurrentlyPlaying()
+            scheduleGeneration += 1
             playerNode.stop()
-            needsReschedule = false
-            lastPlaybackPosition = 0
             pausedPosition = nil
-            playerNode.scheduleFile(audioFile!, at: nil) { [weak self] in
-                self?.needsReschedule = true
-            }
+            scheduleCurrentFileSegment(from: 0)
             if wasPlaying {
                 if !engine.isRunning { try? engine.start() }
                 playerNode.play()
+                isPlaying = true
+            } else {
+                isPlaying = false
             }
+            syncNowPlayingInfo()
             completion?(true)
         } else {
             completion?(true)
@@ -430,16 +512,11 @@ class AudioProcessor {
             self.audioFile = try AVAudioFile(forReading: tempURL)
             
             // Stop current playback
-            let wasPlaying = playerNode.isPlaying
+            let wasPlaying = isCurrentlyPlaying()
+            scheduleGeneration += 1
             playerNode.stop()
-            
-            needsReschedule = false
-            lastPlaybackPosition = 0
             pausedPosition = nil
-            
-            playerNode.scheduleFile(self.audioFile!, at: nil) { [weak self] in
-                self?.needsReschedule = true
-            }
+            scheduleCurrentFileSegment(from: 0)
             
             // Resume playback if it was playing
             if wasPlaying {
@@ -447,7 +524,11 @@ class AudioProcessor {
                     try? engine.start()
                 }
                 playerNode.play()
+                isPlaying = true
+            } else {
+                isPlaying = false
             }
+            syncNowPlayingInfo()
         } catch {
             print("❌ Failed to save separated audio to temp file: \(error.localizedDescription)")
         }
@@ -511,26 +592,38 @@ class AudioProcessor {
     private func setupRemoteTransportControls() {
         let commandCenter = MPRemoteCommandCenter.shared()
 
+        // Clear any previous targets to prevent duplicate registrations
+        commandCenter.playCommand.removeTarget(nil)
+        commandCenter.pauseCommand.removeTarget(nil)
+        commandCenter.togglePlayPauseCommand.removeTarget(nil)
+        commandCenter.changePlaybackPositionCommand.removeTarget(nil)
+        commandCenter.skipForwardCommand.removeTarget(nil)
+        commandCenter.skipBackwardCommand.removeTarget(nil)
+        commandCenter.nextTrackCommand.removeTarget(nil)
+        commandCenter.previousTrackCommand.removeTarget(nil)
+        commandCenter.likeCommand.removeTarget(nil)
+
         // Enable commands explicitly - these MUST stay enabled
         commandCenter.playCommand.isEnabled = true
         commandCenter.pauseCommand.isEnabled = true
         commandCenter.togglePlayPauseCommand.isEnabled = true
+        commandCenter.changePlaybackPositionCommand.isEnabled = true
         
-        print("🔧 Remote commands ENABLED: play, pause, togglePlayPause")
+        print("🔧 Remote commands ENABLED: play, pause, togglePlayPause, changePlaybackPosition")
 
-        // Helper to execute on main thread immediately if possible, to ensure UI updates sync with return .success
+        // Helper to execute on main thread synchronously if possible so NowPlayingInfo is updated before returning .success
         func runOnMain(_ block: @escaping () -> Void) {
             if Thread.isMainThread {
                 block()
             } else {
-                DispatchQueue.main.async(execute: block)
+                DispatchQueue.main.sync(execute: block)
             }
         }
 
         // Add handler for Play Command
-        commandCenter.playCommand.addTarget { [weak self] event in
-            guard let self = self else { return .commandFailed }
-            print("🔘 LOCK SCREEN: Play button pressed")
+        commandCenter.playCommand.addTarget { [weak self] _ in
+            guard let self = self, self.audioFile != nil else { return .commandFailed }
+            print("🔘 LOCK SCREEN / AIRPODS: Play button pressed")
             runOnMain {
                 self.play()
                 self.onPlaybackStateChanged?()
@@ -539,9 +632,9 @@ class AudioProcessor {
         }
 
         // Add handler for Pause Command
-        commandCenter.pauseCommand.addTarget { [weak self] event in
-            guard let self = self else { return .commandFailed }
-            print("🔘 LOCK SCREEN: Pause button pressed")
+        commandCenter.pauseCommand.addTarget { [weak self] _ in
+            guard let self = self, self.audioFile != nil else { return .commandFailed }
+            print("🔘 LOCK SCREEN / AIRPODS: Pause button pressed")
             runOnMain {
                 self.pause()
                 self.onPlaybackStateChanged?()
@@ -549,10 +642,10 @@ class AudioProcessor {
             return .success
         }
         
-        // Add handler for Toggle Play/Pause Command
-        commandCenter.togglePlayPauseCommand.addTarget { [weak self] event in
-            guard let self = self else { return .commandFailed }
-            print("🔘 LOCK SCREEN: Toggle button pressed")
+        // Add handler for Toggle Play/Pause Command (used by AirPods stem click & headphones)
+        commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
+            guard let self = self, self.audioFile != nil else { return .commandFailed }
+            print("🔘 LOCK SCREEN / AIRPODS: Toggle button pressed")
             runOnMain {
                 self.togglePlayback()
                 self.onPlaybackStateChanged?()
@@ -600,7 +693,7 @@ class AudioProcessor {
         }
         
         // Add handlers for Next/Previous Track
-        commandCenter.nextTrackCommand.addTarget { [weak self] event in
+        commandCenter.nextTrackCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
             runOnMain {
                 self.onNextTrack?()
@@ -608,7 +701,7 @@ class AudioProcessor {
             return .success
         }
         
-        commandCenter.previousTrackCommand.addTarget { [weak self] event in
+        commandCenter.previousTrackCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
             runOnMain {
                 self.onPreviousTrack?()
@@ -641,35 +734,56 @@ class AudioProcessor {
     }
 
     /// Updates the Now Playing information on the lock screen and Control Center.
-    func updateNowPlayingInfo(isPaused: Bool = false) {
-        DispatchQueue.main.async { [weak self] in
+    /// Executes synchronously when already on the main thread so remote command handlers return with updated state.
+    func updateNowPlayingInfo(isPaused: Bool? = nil) {
+        let applyUpdate = { [weak self] in
             guard let self = self, var info = self.nowPlayingInfo else {
                 print("⚠️ updateNowPlayingInfo: No nowPlayingInfo available")
                 MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+                if #available(iOS 13.0, *) {
+                    MPNowPlayingInfoCenter.default().playbackState = .stopped
+                }
                 return
             }
             
-            // Use the isPlaying property as the source of truth for playback state
-            let isActuallyPlaying = self.isPlaying && self.playerNode.isPlaying
-            let playbackRate = !isActuallyPlaying ? 0.0 : (self.isVarispeedEnabled ? self.varispeedNode.rate : self.timePitchNode.rate)
+            let isActuallyPlaying: Bool
+            if let explicitPause = isPaused {
+                isActuallyPlaying = !explicitPause && self.isPlaying && self.playerNode.isPlaying
+            } else {
+                isActuallyPlaying = self.isCurrentlyPlaying()
+            }
             
-            print("🎵 updateNowPlayingInfo: self.isPlaying=\(self.isPlaying), playerNode.isPlaying=\(self.playerNode.isPlaying), isActuallyPlaying=\(isActuallyPlaying), FINAL playbackRate=\(playbackRate)")
+            let activeRate = self.isVarispeedEnabled ? self.varispeedNode.rate : self.timePitchNode.rate
+            let playbackRate: Float = isActuallyPlaying ? activeRate : 0.0
+            let elapsed = self.getCurrentTime()
             
-            // Update only the dynamic properties: elapsed time and playback rate.
-            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = self.getCurrentTime()
-            info[MPNowPlayingInfoPropertyPlaybackRate] = playbackRate
+            // Update dynamic properties and persist back to self.nowPlayingInfo
+            info[MPMediaItemPropertyPlaybackDuration] = self.getAudioDuration()
+            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
+            info[MPNowPlayingInfoPropertyPlaybackRate] = Double(playbackRate)
+            info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
+            self.nowPlayingInfo = info
 
-            // Set the updated information.
+            // Set the updated information and explicit playbackState for Lock Screen & Control Center
             MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-            print("✅ Lock screen set to playbackRate: \(playbackRate)")
+            if #available(iOS 13.0, *) {
+                MPNowPlayingInfoCenter.default().playbackState = isActuallyPlaying ? .playing : .paused
+            }
+            print("✅ Lock screen & Control Center synced: isPlaying=\(isActuallyPlaying), rate=\(playbackRate), elapsed=\(elapsed)")
+        }
+
+        if Thread.isMainThread {
+            applyUpdate()
+        } else {
+            DispatchQueue.main.async(execute: applyUpdate)
         }
     }
     
     /// Syncs the now playing info with the current playback state.
     /// Call this whenever playback state might have changed.
     func syncNowPlayingInfo() {
-        let isPlaying = playerNode.isPlaying
-        updateNowPlayingInfo(isPaused: !isPlaying)
+        let playing = isCurrentlyPlaying()
+        updateNowPlayingInfo(isPaused: !playing)
     }
     
     /// Enables or disables the remote commands for playlist navigation.
@@ -679,18 +793,37 @@ class AudioProcessor {
     }
     
     func clearNowPlayingInfo() {
+        nowPlayingInfo = nil
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        if #available(iOS 13.0, *) {
+            MPNowPlayingInfoCenter.default().playbackState = .stopped
+        }
     }
     
-    /// Sets up an observer for audio session interruptions.
+    /// Sets up observers for audio session interruptions, headphone/AirPods route changes, and engine config changes.
     private func setupInterruptionObserver() {
-        NotificationCenter.default.addObserver(self,
-                                               selector: #selector(handleAudioSessionInterruption),
-                                               name: AVAudioSession.interruptionNotification,
-                                               object: AVAudioSession.sharedInstance())
+        let nc = NotificationCenter.default
+        nc.addObserver(
+            self,
+            selector: #selector(handleAudioSessionInterruption),
+            name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+        nc.addObserver(
+            self,
+            selector: #selector(handleAudioRouteChange),
+            name: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+        nc.addObserver(
+            self,
+            selector: #selector(handleEngineConfigurationChange),
+            name: .AVAudioEngineConfigurationChange,
+            object: engine
+        )
     }
     
-    /// Handles audio session interruptions (e.g., phone calls).
+    /// Handles audio session interruptions (e.g., Siri reading a message, phone calls, or another app taking over audio).
     @objc private func handleAudioSessionInterruption(notification: Notification) {
         guard let userInfo = notification.userInfo,
               let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
@@ -698,32 +831,120 @@ class AudioProcessor {
             return
         }
 
-        switch type {
-        case .began:
-            print("Audio session interruption began.")
-            // Pause playback if currently playing
-            if isPlaying {
-                pausedPosition = getCurrentFramePosition()
-                playerNode.pause()
-                isPlaying = false
-                updateNowPlayingInfo(isPaused: true)
-                onPlaybackStateChanged?() // Notify UI to update play/pause button
-            }
-            // The engine might stop automatically. We don't explicitly stop it here
-            // as the system often handles it, and we'll restart it if needed on resume.
-            
-        case .ended:
-            print("Audio session interruption ended.")
-            guard let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt else { return }
-            let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+        let handleOnMain = { [weak self] in
+            guard let self = self else { return }
+            switch type {
+            case .began:
+                print("Audio session interruption began.")
+                // Remember if we were playing before the interruption (even if iOS already stopped the engine)
+                let wasPlaying = self.isPlaying || self.playerNode.isPlaying
+                if wasPlaying {
+                    if let pos = self.getCurrentFramePosition() {
+                        self.pausedPosition = pos
+                        self.lastKnownFramePosition = pos
+                    } else if self.pausedPosition == nil {
+                        self.pausedPosition = self.lastKnownFramePosition
+                    }
+                    if self.playerNode.isPlaying {
+                        self.playerNode.pause()
+                    }
+                    self.isPlaying = false
+                    self.needsSegmentReschedule = true
+                    self.wasPlayingBeforeInterruption = true
+                    self.updateNowPlayingInfo(isPaused: true)
+                    self.onPlaybackStateChanged?() // Notify UI & Lock Screen to show paused state
+                }
+                
+            case .ended:
+                print("Audio session interruption ended.")
+                var shouldResume = false
+                if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+                    let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                    shouldResume = options.contains(.shouldResume)
+                }
 
-            if options.contains(.shouldResume) {
-                print("Audio session should resume. Attempting to reactivate.")
-                // Reactivate the session. The engine will be restarted by togglePlayback if needed.
-                try? AVAudioSession.sharedInstance().setActive(true)
+                // When Siri finishes reading a message or announcement, .shouldResume is set.
+                // Resume playback automatically if we were playing before the interruption began.
+                if self.wasPlayingBeforeInterruption && shouldResume {
+                    print("Audio session interruption ended with .shouldResume — automatically resuming playback.")
+                    self.wasPlayingBeforeInterruption = false
+                    self.play()
+                    self.onPlaybackStateChanged?()
+                } else {
+                    self.wasPlayingBeforeInterruption = false
+                    self.updateNowPlayingInfo(isPaused: !self.isCurrentlyPlaying())
+                    self.onPlaybackStateChanged?()
+                }
+            @unknown default:
+                print("Unknown audio session interruption type.")
             }
-        @unknown default:
-            print("Unknown audio session interruption type.")
+        }
+
+        if Thread.isMainThread {
+            handleOnMain()
+        } else {
+            DispatchQueue.main.async(execute: handleOnMain)
+        }
+    }
+
+    /// Handles headphone / AirPods connects and disconnects (e.g., taking AirPods out of ears).
+    @objc private func handleAudioRouteChange(notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else {
+            return
+        }
+
+        let handleOnMain = { [weak self] in
+            guard let self = self else { return }
+            switch reason {
+            case .oldDeviceUnavailable:
+                // Headphones unplugged or AirPods taken out of ears -> pause and update Lock Screen / Control Center
+                print("🎧 Audio route oldDeviceUnavailable — pausing playback.")
+                self.pause()
+                self.needsSegmentReschedule = true
+                self.onPlaybackStateChanged?()
+            case .newDeviceAvailable:
+                print("🎧 Audio route newDeviceAvailable.")
+                self.syncNowPlayingInfo()
+                self.onPlaybackStateChanged?()
+            default:
+                break
+            }
+        }
+
+        if Thread.isMainThread {
+            handleOnMain()
+        } else {
+            DispatchQueue.main.async(execute: handleOnMain)
+        }
+    }
+
+    /// Handles AVAudioEngine hardware configuration changes (e.g., sample rate changes when switching to/from AirPods).
+    @objc private func handleEngineConfigurationChange(notification: Notification) {
+        let handleOnMain = { [weak self] in
+            guard let self = self, self.audioFile != nil, !self.isExporting else { return }
+            print("⚙️ AVAudioEngineConfigurationChange received.")
+            self.needsSegmentReschedule = true
+            if let file = self.audioFile {
+                self.connectNodes(format: file.processingFormat)
+            }
+            if self.isPlaying {
+                // If we are supposed to be playing (e.g. headphones plugged in), restart engine and resume seamlessly
+                self.isPlaying = false
+                self.play()
+                self.onPlaybackStateChanged?()
+            } else {
+                // Ensure Lock Screen and UI reflect paused state if engine stopped
+                self.updateNowPlayingInfo(isPaused: true)
+                self.onPlaybackStateChanged?()
+            }
+        }
+
+        if Thread.isMainThread {
+            handleOnMain()
+        } else {
+            DispatchQueue.main.async(execute: handleOnMain)
         }
     }
     
@@ -741,7 +962,7 @@ class AudioProcessor {
                 timePitchNode.pitch = pitch
             }
         }
-        updateNowPlayingInfo(isPaused: !isPlaying)
+        updateNowPlayingInfo(isPaused: !isCurrentlyPlaying())
         onPlaybackRateChanged?(rate)
     }
     
@@ -751,6 +972,7 @@ class AudioProcessor {
         isVarispeedEnabled = enabled
         
         // Stop playback and reset engine
+        scheduleGeneration += 1
         playerNode.stop()
         engine.stop()
         isPlaying = false
@@ -758,9 +980,7 @@ class AudioProcessor {
         if let file = audioFile {
             connectNodes(format: file.processingFormat)
             // Reschedule the file
-            playerNode.scheduleFile(file, at: nil) { [weak self] in
-                self?.needsReschedule = true
-            }
+            scheduleCurrentFileSegment(from: 0)
         } else {
             let commonFormat = engine.mainMixerNode.outputFormat(forBus: 0)
             connectNodes(format: commonFormat)
@@ -773,6 +993,7 @@ class AudioProcessor {
         }
         
         lastPlaybackPosition = 0
+        lastKnownFramePosition = 0
         pausedPosition = nil
         updateNowPlayingInfo(isPaused: true)
     }
@@ -829,9 +1050,10 @@ class AudioProcessor {
         isExporting = true
         
         // Stop playback to avoid issues with the engine state
-        let wasPlaying = playerNode.isPlaying
+        scheduleGeneration += 1
         playerNode.stop()
         engine.stop()
+        isPlaying = false
 
         do {
             let maxFrames: AVAudioFrameCount = 4096
@@ -912,22 +1134,23 @@ class AudioProcessor {
             outputFile = nil
             
             // Clean up
+            scheduleGeneration += 1
             playerNode.stop()
             engine.stop()
             engine.disableManualRenderingMode()
             
             // Reschedule the original file for normal playback
-            playerNode.scheduleFile(sourceFile, at: nil) { [weak self] in
-                self?.needsReschedule = true
-            }
+            scheduleCurrentFileSegment(from: 0)
             
             // Restart engine for future playback
             try engine.start()
             
             // Reset playback to beginning and pause
             lastPlaybackPosition = 0
+            lastKnownFramePosition = 0
             pausedPosition = nil
             isPlaying = false
+            updateNowPlayingInfo(isPaused: true)
             
             if let artwork = self.currentArtwork {
                 self.embedMetadata(audioURL: outputURL, title: self.currentTitle, artist: self.currentArtist, artwork: artwork) { resultURL in
@@ -942,14 +1165,14 @@ class AudioProcessor {
         } catch {
             // Ensure we clean up on error
             isExporting = false
+            scheduleGeneration += 1
             engine.stop()
             engine.disableManualRenderingMode()
             
             // Attempt to restore engine state
             try? engine.start()
-            playerNode.scheduleFile(sourceFile, at: nil) { [weak self] in
-                self?.needsReschedule = true
-            }
+            scheduleCurrentFileSegment(from: 0)
+            updateNowPlayingInfo(isPaused: true)
             
             completion(.failure(error))
         }
@@ -3335,7 +3558,7 @@ class SongTableViewCell: UITableViewCell {
     
     private func setupBackgroundConfiguration() {
         // Set explicit background configuration to prevent nil configuration errors during rapid scrolling
-        var defaultConfig = UIBackgroundConfiguration.clear()
+        let defaultConfig = UIBackgroundConfiguration.clear()
         backgroundConfiguration = defaultConfig
         backgroundColor = .clear
     }
@@ -3495,7 +3718,7 @@ class QueueViewController: UITableViewController {
                     if let art = image {
                         self?.artworkCache.setObject(art, forKey: cacheKey)
                         DispatchQueue.main.async {
-                            if let visibleCell = tableView.cellForRow(at: indexPath) {
+                            if tableView.cellForRow(at: indexPath) != nil {
                                 tableView.reloadRows(at: [indexPath], with: .none)
                             }
                         }
@@ -3679,6 +3902,8 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
     private let currentTimeLabel = UILabel()
     private let durationLabel = UILabel()
     private var progressUpdateTimer: Timer?
+    private var lastLockScreenSyncTime: TimeInterval = 0
+    private var lastDisplayedPlayingState: Bool = false
     
     private let pitchLabel = UILabel()
     private let pitchSlider = UISlider()
@@ -3915,7 +4140,8 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
             progressSlider.maximumValue = Float(duration)
             durationLabel.text = formatTime(seconds: duration)
             
-            togglePlayback()
+            audioProcessor.play()
+            updatePlayPauseButtonState()
         }
     }
     
@@ -4680,7 +4906,6 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
             }
         }
         
-        // Restore the last audio file
         // Restore the last audio file first, as it provides the artwork for dynamic theming.
         guard let lastSongIDString = UserDefaults.standard.string(forKey: "lastSongID"),
               let lastSongID = UUID(uuidString: lastSongIDString),
@@ -4688,41 +4913,39 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
             return
         }
         
-        do {
-                // Load the file but don't auto-play
-                loadSong(song, andPlay: false)
-            
-                // Restore slider values AFTER loading the song so they aren't reset to defaults
-                pitchSlider.value = initialSavedPitch
-                pitchSliderChanged(pitchSlider)
-                
-                speedSlider.value = initialSavedSpeed != 0 ? initialSavedSpeed : 1.0 // Default to 1.0 if not set
-                speedSliderChanged(speedSlider)
-                
-                reverbSlider.value = initialSavedReverb
-                reverbSliderChanged(reverbSlider)
-                
-                bassSlider.value = initialSavedBass
-                bassSliderChanged(bassSlider)
-                
-                midsSlider.value = initialSavedMids
-                midsSliderChanged(midsSlider)
-                
-                trebleSlider.value = initialSavedTreble
-                trebleSliderChanged(trebleSlider)
-                
-                // Restore playback position after the file is loaded
-                let lastPosition = UserDefaults.standard.double(forKey: "lastPlaybackPosition")
-                if lastPosition > 0 {
-                    audioProcessor.seek(to: lastPosition)
-                    progressSlider.value = Float(lastPosition)
-                    currentTimeLabel.text = formatTime(seconds: lastPosition)
-                }
+        // Load the file but don't auto-play
+        loadSong(song, andPlay: false)
+    
+        // Restore slider values AFTER loading the song so they aren't reset to defaults
+        pitchSlider.value = initialSavedPitch
+        pitchSliderChanged(pitchSlider)
+        
+        speedSlider.value = initialSavedSpeed != 0 ? initialSavedSpeed : 1.0 // Default to 1.0 if not set
+        speedSliderChanged(speedSlider)
+        
+        reverbSlider.value = initialSavedReverb
+        reverbSliderChanged(reverbSlider)
+        
+        bassSlider.value = initialSavedBass
+        bassSliderChanged(bassSlider)
+        
+        midsSlider.value = initialSavedMids
+        midsSliderChanged(midsSlider)
+        
+        trebleSlider.value = initialSavedTreble
+        trebleSliderChanged(trebleSlider)
+        
+        // Restore playback position after the file is loaded
+        let lastPosition = UserDefaults.standard.double(forKey: "lastPlaybackPosition")
+        if lastPosition > 0 {
+            audioProcessor.seek(to: lastPosition)
+            progressSlider.value = Float(lastPosition)
+            currentTimeLabel.text = formatTime(seconds: lastPosition)
         }
     }
     
     @objc private func clearState() {
-        audioProcessor.togglePlayback() // Stop playback if active
+        audioProcessor.pause() // Stop playback if active (don't toggle on if already paused)
         
         // Clear only file-related UserDefaults
         UserDefaults.standard.removeObject(forKey: "lastSongID")
@@ -4755,16 +4978,48 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
     @objc private func updateProgress() {
         let currentTime = audioProcessor.getCurrentTime()
         let duration = audioProcessor.getAudioDuration()
+        let currentlyPlaying = audioProcessor.isCurrentlyPlaying()
         
         progressSlider.value = Float(currentTime)
         currentTimeLabel.text = formatTime(seconds: currentTime)
         
-        // Update lock screen elapsed time only when actually playing
-        if audioProcessor.isCurrentlyPlaying() {
+        // Keep the UI Play/Pause button and Lock Screen synced if playback state changed externally
+        if currentlyPlaying != lastDisplayedPlayingState {
+            lastDisplayedPlayingState = currentlyPlaying
+            updatePlayPauseButtonState()
             audioProcessor.syncNowPlayingInfo()
+            lastLockScreenSyncTime = ProcessInfo.processInfo.systemUptime
+        } else if currentlyPlaying {
+            // Avoid spamming MPNowPlayingInfoCenter every 0.1s (which causes iOS mediaremoted to throttle/drop pause updates).
+            // Sync at most once every 5 seconds while playing for drift correction.
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - lastLockScreenSyncTime >= 5.0 {
+                audioProcessor.syncNowPlayingInfo()
+                lastLockScreenSyncTime = now
+            }
         }
         
-        guard audioProcessor.isCurrentlyPlaying() else { return }
+        // Check if the song finished playing
+        if duration > 0 && (currentTime >= duration || audioProcessor.didFinishPlaying()) {
+            if isLoopingEnabled {
+                audioProcessor.seek(to: 0)
+                audioProcessor.play()
+                progressSlider.value = 0
+                currentTimeLabel.text = formatTime(seconds: 0)
+                updatePlayPauseButtonState()
+            } else if isAutoPlayNextEnabled {
+                playNextSong()
+            } else {
+                audioProcessor.pause()
+                audioProcessor.seek(to: 0)
+                updatePlayPauseButtonState()
+                progressSlider.value = 0 // Reset slider to beginning
+                currentTimeLabel.text = formatTime(seconds: 0)
+            }
+            return
+        }
+
+        guard currentlyPlaying else { return }
         
         accumulatedPlaybackTime += 0.1
         if !hasRecordedRecentlyPlayed && accumulatedPlaybackTime >= 30.0 {
@@ -4773,23 +5028,6 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
                 LibraryManager.shared.updateSong(song)
                 currentSong = song
                 hasRecordedRecentlyPlayed = true
-            }
-        }
-        
-        // If song finishes, update play button icon
-        if currentTime >= duration {
-            if isLoopingEnabled {
-                audioProcessor.seek(to: 0)
-                progressSlider.value = 0
-                currentTimeLabel.text = formatTime(seconds: 0)
-            } else if isAutoPlayNextEnabled {
-                playNextSong()
-            } else {
-                audioProcessor.pause()
-                audioProcessor.seek(to: 0)
-                playPauseButton.setImage(UIImage(systemName: "play.fill"), for: .normal)
-                progressSlider.value = 0 // Reset slider to beginning
-                currentTimeLabel.text = formatTime(seconds: 0)
             }
         }
     }
@@ -5058,6 +5296,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
     
     private func updatePlayPauseButtonState() {
         let isPlaying = audioProcessor.isCurrentlyPlaying()
+        lastDisplayedPlayingState = isPlaying
         let imageName = isPlaying ? "pause.fill" : "play.fill"
         playPauseButton.setImage(UIImage(systemName: imageName), for: .normal)
         
@@ -5077,7 +5316,7 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
     
     @objc func progressSliderScrubbing(_ sender: UISlider) {
         audioProcessor.seek(to: Double(sender.value))
-        audioProcessor.updateNowPlayingInfo(isPaused: !audioProcessor.isCurrentlyPlaying())
+        currentTimeLabel.text = formatTime(seconds: Double(sender.value))
     }
     
     @objc func openSettings() {
@@ -5275,7 +5514,8 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
             guard let self = self else { return }
             
             if self.audioProcessor.isCurrentlyPlaying() {
-                self.togglePlayback()
+                self.audioProcessor.pause()
+                self.updatePlayPauseButtonState()
             }
             
             self.showSpectrogramColorPicker(for: url)
@@ -5416,9 +5656,8 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
     
     /// Stops playback and resets the UI to the "No File Loaded" state.
     private func clearCurrentSongAndStopPlayback() {
-        if audioProcessor.isCurrentlyPlaying() {
-            audioProcessor.togglePlayback() // This will stop playback and update the Now Playing info
-        }
+        audioProcessor.pause()
+        audioProcessor.clearNowPlayingInfo()
         
         // Reset UI elements
         resetControlsState(isHidden: true)
@@ -5810,12 +6049,13 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
             progressSlider.maximumValue = Float(duration)
             durationLabel.text = formatTime(seconds: duration)
             
-            audioProcessor.updateNowPlayingInfo(isPaused: true)
             if andPlay {
-                // Automatically start playing
-                togglePlayback()
+                // Explicitly start playing and sync Now Playing info in one clean step
+                audioProcessor.play()
+                updatePlayPauseButtonState()
             } else {
-                // If not playing, update the button state (and album art size)
+                // If not playing, update the button state and paused Now Playing info
+                audioProcessor.updateNowPlayingInfo(isPaused: true)
                 updatePlayPauseButtonState()
             }
         } else {
@@ -5951,7 +6191,6 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         progressSlider.value = Float(newTime)
         currentTimeLabel.text = formatTime(seconds: newTime)
         impactFeedbackGenerator.impactOccurred()
-        audioProcessor.updateNowPlayingInfo(isPaused: !audioProcessor.isCurrentlyPlaying())
     }
 
     @objc private func skip10Seconds() {
@@ -5962,7 +6201,6 @@ class AudioEffectsViewController: UIViewController, SettingsViewControllerDelega
         audioProcessor.seek(to: newTime)
         progressSlider.value = Float(newTime)
         currentTimeLabel.text = formatTime(seconds: newTime)
-        audioProcessor.updateNowPlayingInfo(isPaused: !audioProcessor.isCurrentlyPlaying())
     }
     
     // MARK: Playlist Navigation
@@ -6424,8 +6662,10 @@ class SpectrogramPreviewViewController: UIViewController {
         guard let image = currentImage else { return }
         let activityVC = UIActivityViewController(activityItems: [image], applicationActivities: nil)
         if let popover = activityVC.popoverPresentationController {
+            popover.sourceView = view
             popover.barButtonItem = navigationItem.rightBarButtonItems?.last
         }
         present(activityVC, animated: true)
     }
 }
+
